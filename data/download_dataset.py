@@ -70,6 +70,7 @@ def main():
     # NOTE: the ASTs file and Isolates file come from different databases and the Isolates database has much more organisms.
     # The common column in both dataframes is the 'Isolate' column and we're filtering for only those 'Isolate' that are present in the ASTs file.
     # We will match the corresponding assembly to the ASTs dataframe for each isolate and that will be used to download the genomes.
+    
     # get the list of unique isolates     
     unique_isolates_asts = df_asts['Isolate'].unique()
     logger.info(f"Number of unique isolates in ASTs: {len(unique_isolates_asts)}")
@@ -96,13 +97,13 @@ def main():
     # save the updated ASTs dataframe to a new tsv file
     df_asts.to_csv(os.path.join(os.path.dirname(args.path_asts), '20250505_ncbi_asts_filtered_all_organisms.tsv'), sep='\t', index=False)
 
-    # NOTE: Not all organisms have the sufficent number of S/R phenotypes to be used for training.
-    # Hence, we will filter the organisms to keep only those that have more than 1000 samples combining all specie x drug combinations
     # get the unique organism groups
     unique_organisms = df_asts['Organism group'].unique()
     logger.info(f"Unique organism groups in ASTs: {unique_organisms}")
     logger.info(f"Number of unique organism groups in ASTs: {len(unique_organisms)}")
 
+    # # NOTE: Not all organisms have the sufficent number of S/R phenotypes to be used for training.
+    # # Hence, we will filter the organisms to keep only those that have more than 1000 samples combining all specie x drug combinations
     # # drop columns where counts are less than 1000
     # df_counts = df_asts['Organism group'].value_counts()
     # organism_gt_1000 = df_counts[df_counts > 1000].index
