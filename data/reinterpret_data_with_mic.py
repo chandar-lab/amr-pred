@@ -1,5 +1,9 @@
 """
-
+Script for preprocessing the NCBI ASTs dataset. The script does the following:
+1. Loads the NCBI ASTs dataset containing all species, phenotypic AST labels, and assemblies.
+    1.1 Filters the dataset with MIC values from CLSI breakpoints
+2. (optional) Generates barplots showing genome counts per species and antibiotic.
+3. Store the individual species-antibiotic dataset combination in a separate CSV file for training.
 """
 
 import pandas as pd
@@ -103,7 +107,7 @@ def plot_antibiotic_counts(antibiotic_dict, organism, save_path):
     plt.figure(figsize=(13, 8))
     sns.barplot(data=df_counts_melted, x="Antibiotic", y="Count", hue="Resistance phenotype")
     plt.yscale("log")
-    plt.ylim(10, 10**3)
+    plt.ylim(10, 5*10**3)
     plt.ylabel("Genome Count (Log Scale)", fontsize=FONTSIZE+3)
     plt.xlabel("Antibiotic", fontsize=FONTSIZE+3)
     plt.yticks(fontsize=FONTSIZE)
@@ -182,7 +186,11 @@ def get_drugs_for_organism_clsi(df, organism):
 
 # keep only those samples where 'resistant' is only '>' / '>=' / '=='
 def is_resistant(row, mic_r):
-    return row['Measurement sign'] in ['>', '>=', '=='] and row['MIC (mg/L)'] >= mic_r
+    return row['Measurement sign'] in ['>', '>=', '=='] and row['MIC (mg/L)'] >= (mic_r//2)
+    # NOTE: why mic_r//2? because phenotypic tests always tested for double dillutions. 
+    # e.g. if the test says >32 than it means that the measured MIC value is >= 64, 
+    # so with a breakpoint of 64 the category is resistant.
+    # But, if the measured MIC value is >16 than you it is inconclusive.
 
 # keep only those samples where 'susceptible' is only '<' / '<=' / '=='
 def is_susceptible(row, mic_s):
@@ -196,7 +204,6 @@ def main():
     # create the output directory if it doesn't exist
     if not os.path.exists(args.path_out):
         os.makedirs(args.path_out, exist_ok=True)
-
 
     # load the data
     df = pd.read_csv(args.path_data, index_col=0)
