@@ -34,6 +34,13 @@ def get_parser():
         default="acinetobacter_baumannii_SRND_20250527.csv",
         help="Path to the ncbi dataset (output of `download_dataset.py`)",
     )
+
+    parser.add_argument(
+        "--path-isolates",
+        type=str,
+        default="isolates.tsv",
+        help="Path to the isolates file downloaded from https://www.ncbi.nlm.nih.gov/pathogens/isolates",   
+    )
     parser.add_argument(
         "--path-out",
         type=str,
@@ -205,8 +212,40 @@ def main():
     if not os.path.exists(args.path_out):
         os.makedirs(args.path_out, exist_ok=True)
 
+    # get the organism name from the path_data
+    organism = os.path.basename(os.path.dirname(args.path_data))
+
     # load the data
-    df = pd.read_csv(args.path_data, index_col=0)
+    df = pd.read_csv(args.path_data, low_memory=False)
+    phenotypic_unique_isolates = df['Isolate'].unique()
+    print(f"Number of isolates in phenotypic data: {len(df['Isolate'].unique())}")
+
+    # ================================
+    # Store the assembly identifier in the dataframe 
+    # ================================
+    
+    # add the assembly column to the dataframe
+    df_isolates = pd.read_csv(args.path_isolates, sep="\t", low_memory=False)
+
+    # keep the data for the organism
+    df_isolates['#Organism group'] = df_isolates['#Organism group'].str.replace(' ', '_', regex=False)
+    df_isolates['#Organism group'] = df_isolates['#Organism group'].str.lower()
+    df_isolates = df_isolates[df_isolates['#Organism group'] == organism]
+
+    # drop the rows where 'Assembly' is NaN
+    df_isolates = df_isolates.dropna(subset=['Assembly'])
+    print(f"Number of isolates after dropping empty assemblies: {len(df_isolates['Isolate'].unique())}")
+
+    # keep only the isolates that are in the ASTs file
+    df_isolates_common = df_isolates[df_isolates['Isolate'].isin(phenotypic_unique_isolates)]
+    # keep only the isolates and assembly columns
+    df_isolates_common = df_isolates_common[['Isolate', 'Assembly']]
+    print(f"Number of common isolates: {len(df_isolates_common)}")
+
+    # merge the isolates dataframe with the main dataframe on 'Isolate' column
+    df = df.merge(df_isolates_common, on='Isolate', how='inner')
+    print(f"Number of samples after merging with isolates: {len(df)}")
+
     # make sure the 'Antibiotic' column is lowercase
     df['Antibiotic'] = df['Antibiotic'].str.lower()
     # replace space or '-' in drug names with underscore
@@ -223,7 +262,11 @@ def main():
     print(f"Number of susceptible samples: {len(df[df['Resistance phenotype'] == 'susceptible'])}")
     print(f"Number of unknown samples: {len(df[df['Resistance phenotype'] == 'not defined'])}")
 
-    organism = os.path.basename(os.path.dirname(args.path_data))
+
+    # ================================
+    # Filter the dataset with CLSI breakpoints
+    # ================================
+
     # get cleaned breakpoints df
     df_bps = clean_breakpoints_file(args.path_clsi_bps)
 
@@ -248,7 +291,7 @@ def main():
     print(f"Number of unique species: {len(organism_groups)}")
     print(f"Species: {organism_groups}")
 
-    drugs = df['Antibiotic'].unique().tolist()
+    drugs = sorted(df['Antibiotic'].unique().tolist())
 
 
     dataset_counts = {}
