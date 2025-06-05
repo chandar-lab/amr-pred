@@ -318,6 +318,10 @@ def main():
         
         drug_count = {}
         for drug in drugs:
+            logger.info(f"======================")
+            logger.info(f"Drug {drug}")
+            logger.info(f"======================")
+
             # filter out for the current drug
             df_new = df[df['Antibiotic'] == drug]
 
@@ -371,8 +375,13 @@ def main():
                 # keep only the relevant columns
                 df_to_compare = df_new[['#BioSample', 'Organism group', 'Isolate', 'Assembly', 'Antibiotic', 
                                  'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype', 'MIC_revised', 'Phenotype_revised']]
-                # save the filtered dataframe to a new CSV file
-                df_to_compare.to_csv(output_path.replace('SR_filt.csv', 'compare.csv'), index=True)
+                # # save the filtered dataframe to a new CSV file
+                # df_to_compare.to_csv(output_path.replace('SR_filt.csv', 'compare.csv'), index=True)
+                # get the samples where 'resistance phenotype' is not the same as 'Phenotype_revised'
+                df_compare = df_to_compare[df_to_compare['Resistance phenotype'] != df_to_compare['Phenotype_revised']]
+                if not df_compare.empty:
+                    logger.info(f"Samples with different resistance phenotype: {len(df_compare)}")
+                    logger.info(f"Samples:\n{df_compare[['#BioSample', 'Organism group', 'Isolate', 'Assembly', 'Antibiotic', 'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype', 'MIC_revised', 'Phenotype_revised']]}")
 
                 # create the dictionary
                 drug_count[drug] = {
