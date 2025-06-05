@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 import argparse
+from loguru import logger
 
 
 # global parameters
@@ -215,10 +216,13 @@ def main():
     # get the organism name from the path_data
     organism = os.path.basename(os.path.dirname(args.path_data))
 
+    # logging setup
+    logger.add(os.path.join(args.path_out, organism, 'filtered', "log.txt"), level="INFO", rotation="10 MB", backtrace=True, diagnose=True)
+
     # load the data
     df = pd.read_csv(args.path_data, low_memory=False)
     phenotypic_unique_isolates = df['Isolate'].unique()
-    print(f"Number of isolates in phenotypic data: {len(df['Isolate'].unique())}")
+    logger.info(f"Number of isolates in phenotypic data: {len(df['Isolate'].unique())}")
 
     # ================================
     # Store the assembly identifier in the dataframe 
@@ -234,17 +238,17 @@ def main():
 
     # drop the rows where 'Assembly' is NaN
     df_isolates = df_isolates.dropna(subset=['Assembly'])
-    print(f"Number of isolates after dropping empty assemblies: {len(df_isolates['Isolate'].unique())}")
+    logger.info(f"Number of isolates after dropping empty assemblies: {len(df_isolates['Isolate'].unique())}")
 
     # keep only the isolates that are in the ASTs file
     df_isolates_common = df_isolates[df_isolates['Isolate'].isin(phenotypic_unique_isolates)]
     # keep only the isolates and assembly columns
     df_isolates_common = df_isolates_common[['Isolate', 'Assembly']]
-    print(f"Number of common isolates: {len(df_isolates_common)}")
+    logger.info(f"Number of common isolates: {len(df_isolates_common)}")
 
     # merge the isolates dataframe with the main dataframe on 'Isolate' column
     df = df.merge(df_isolates_common, on='Isolate', how='inner')
-    print(f"Number of samples after merging with isolates: {len(df)}")
+    logger.info(f"Number of samples after merging with isolates: {len(df)}")
 
     # make sure the 'Antibiotic' column is lowercase
     df['Antibiotic'] = df['Antibiotic'].str.lower()
@@ -257,10 +261,10 @@ def main():
     df['Organism group'] = df['Organism group'].str.replace(' ', '_', regex=False)
 
     # print number of resistant and susceptible samples (RAW DATASET)
-    print(f"Number of samples (RAW DATA): {len(df)}")
-    print(f"Number of resistant samples: {len(df[df['Resistance phenotype'] == 'resistant'])}")
-    print(f"Number of susceptible samples: {len(df[df['Resistance phenotype'] == 'susceptible'])}")
-    print(f"Number of unknown samples: {len(df[df['Resistance phenotype'] == 'not defined'])}")
+    logger.info(f"Number of samples (RAW DATA): {len(df)}")
+    logger.info(f"\tNumber of resistant samples: {len(df[df['Resistance phenotype'] == 'resistant'])}")
+    logger.info(f"\tNumber of susceptible samples: {len(df[df['Resistance phenotype'] == 'susceptible'])}")
+    logger.info(f"\tNumber of unknown samples: {len(df[df['Resistance phenotype'] == 'not defined'])}")
 
 
     # ================================
@@ -273,6 +277,7 @@ def main():
     # filter out to keep only the drugs that are in the breakpoints file
     drugs_in_bps = get_drugs_for_organism_clsi(df_bps, organism)
     df = df[df['Antibiotic'].isin(drugs_in_bps)]
+    # df.to_csv(os.path.join(args.path_out, organism, 'temp_data.csv'), index=True)
 
     # add a check to ensure that list of drugs match
     if not set(df['Antibiotic'].unique()).issubset(set(drugs_in_bps)):
@@ -288,8 +293,8 @@ def main():
     # organism_groups = sorted(df["Organism group"].unique())
     organism_groups = [organism]
 
-    print(f"Number of unique species: {len(organism_groups)}")
-    print(f"Species: {organism_groups}")
+    logger.info(f"Number of unique species: {len(organism_groups)}")
+    logger.info(f"Species: {organism_groups}")
 
     drugs = sorted(df['Antibiotic'].unique().tolist())
 
@@ -335,14 +340,13 @@ def main():
             num_not_defined = len(df_filtered[df_filtered['Resistance phenotype'] == 'not defined'])
 
             if num_resistant < 50 or num_susceptible < 50:
-                print(f"Warning: Not enough samples for {drug}. Resistant: {num_resistant}, Susceptible: {num_susceptible}.")
-                print("Not saving the filtered dataframe for this drug.")
+                logger.info(f"Warning: Not enough samples for {drug}. Resistant: {num_resistant}, Susceptible: {num_susceptible}.")
+                logger.info("Not saving the filtered dataframe for this drug.")
                 continue
             
             else:
-                print(f"Number of resistant samples for {drug}: {num_resistant}")
-                print(f"Number of susceptible samples for {drug}: {num_susceptible}")
-                print(f"Number of not defined samples for {drug}: {num_not_defined}")
+                logger.info(f"Number of resistant samples for {drug}: {num_resistant}")
+                logger.info(f"Number of susceptible samples for {drug}: {num_susceptible}")
 
                 # save the filtered dataframe
                 output_path = os.path.join(args.path_out, organism, 'filtered', f"{organism}__{drug}_SR_filt.csv")
@@ -363,7 +367,7 @@ def main():
                 # dataset_counts[organism] = dataset_counts.get(organism, 0) + 1
 
         if len(drug_count) == 0:
-            print(f"No drugs with at least 50 S/R genomes found for {organism}")
+            logger.info(f"No drugs with at least 50 S/R genomes found for {organism}")
         else:
             if args.save_plots:
                 save_path = os.path.join(args.path_out, organism, "filtered", "plots_single_species")
