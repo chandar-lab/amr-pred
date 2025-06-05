@@ -167,10 +167,10 @@ def get_mic_breakpoints(df_bps, organism, drug):
         return None, None
     
     # get the breakpoints
-    mic_s = df_filtered['BP_S_CLSI (<=)'].values[0]
-    mic_r = df_filtered['BP_R_CLSI (>=)'].values[0]
+    bp_s = df_filtered['BP_S_CLSI (<=)'].values[0]
+    bp_r = df_filtered['BP_R_CLSI (>=)'].values[0]
     
-    return mic_s, mic_r
+    return bp_s, bp_r
 
 
 def get_drugs_for_organism_clsi(df, organism):
@@ -284,11 +284,31 @@ def main():
         raise ValueError("Some drugs in the dataset are not found in the breakpoints file.")
 
     # print number of resistant and susceptible samples (after 1st level of filtering -- CLSI drugs)
-    print(f"Number of samples (AFTER FILTERING FOR CLSI DRUGS): {len(df)}")
-    print(f"Number of resistant samples: {len(df[df['Resistance phenotype'] == 'resistant'])}")
-    print(f"Number of susceptible samples: {len(df[df['Resistance phenotype'] == 'susceptible'])}")
-    print(f"Number of unknown samples: {len(df[df['Resistance phenotype'] == 'not defined'])}")
+    logger.info(f"Number of samples (AFTER FILTERING FOR CLSI DRUGS): {len(df)}")
+    logger.info(f"\tNumber of resistant samples: {len(df[df['Resistance phenotype'] == 'resistant'])}")
+    logger.info(f"\tNumber of susceptible samples: {len(df[df['Resistance phenotype'] == 'susceptible'])}")
+    logger.info(f"\tNumber of unknown samples: {len(df[df['Resistance phenotype'] == 'not defined'])}")
 
+    # create a new column 'MIC_revised' that will contain the MIC values
+    # that are revised based on the CLSI breakpoints
+    df['MIC_revised'] = df['MIC (mg/L)'].copy()
+    # iterate through the dataframe and fill the 'MIC_revised' column
+    for index, row in tqdm(df.iterrows(), total=len(df), desc="Revising MIC values"):
+        # get the drug and organism for the current row
+        drug = row['Antibiotic']
+        organism = row['Organism group']
+
+        # check if the sample is resistant or susceptible
+        if row['Measurement sign'] == '>':
+            df.at[index, 'MIC_revised'] = row['MIC (mg/L)'] * 2
+            # NOTE: why * 2? because phenotypic tests are tested for double dilutions. 
+            # e.g. if the test says MIC >32 then, it means that the measured MIC value is >= 64, 
+            # so with a breakpoint of 64 the category is resistant.
+            # But, if the measured MIC value is >16, then the test is inconclusive.
+
+        elif row['Measurement sign'] in ['<']:
+            df.at[index, 'MIC_revised'] = row['MIC (mg/L)'] / 2
+            
     # get the list of all the unique organism groups
     # organism_groups = sorted(df["Organism group"].unique())
     organism_groups = [organism]
