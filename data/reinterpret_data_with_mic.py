@@ -367,7 +367,12 @@ def main():
                     os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 
                 # save the filtered dataframe to a CSV file
-                df_filtered.to_csv(output_path, index=False)
+                df_new.to_csv(output_path, index=False)
+                # keep only the relevant columns
+                df_to_compare = df_new[['#BioSample', 'Organism group', 'Isolate', 'Assembly', 'Antibiotic', 
+                                 'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype', 'MIC_revised', 'Phenotype_revised']]
+                # save the filtered dataframe to a new CSV file
+                df_to_compare.to_csv(output_path.replace('SR_filt.csv', 'compare.csv'), index=True)
 
                 # create the dictionary
                 drug_count[drug] = {
