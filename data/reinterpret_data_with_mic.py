@@ -192,17 +192,11 @@ def get_drugs_for_organism_clsi(df, organism):
     return drugs
 
 
-# keep only those samples where 'resistant' is only '>' / '>=' / '=='
-def is_resistant(row, mic_r):
-    return row['Measurement sign'] in ['>', '>=', '=='] and row['MIC (mg/L)'] >= (mic_r//2)
-    # NOTE: why mic_r//2? because phenotypic tests always tested for double dillutions. 
-    # e.g. if the test says >32 than it means that the measured MIC value is >= 64, 
-    # so with a breakpoint of 64 the category is resistant.
-    # But, if the measured MIC value is >16 than you it is inconclusive.
+def is_resistant(row, bp_r):
+    return row['MIC_revised'] >= bp_r
 
-# keep only those samples where 'susceptible' is only '<' / '<=' / '=='
-def is_susceptible(row, mic_s):
-    return row['Measurement sign'] in ['<', '<=', '=='] and row['MIC (mg/L)'] <= mic_s
+def is_susceptible(row, bp_s):
+    return row['MIC_revised'] <= bp_s
 
 
 def main():
@@ -327,37 +321,35 @@ def main():
             # filter out for the current drug
             df_new = df[df['Antibiotic'] == drug]
 
+            # initialize the 'Phenotype_revised' column with NaN values
+            df_new['Phenotype_revised'] = np.nan
+            
             # get breakpoints for the current drug and organism
-            mic_s, mic_r = get_mic_breakpoints(df_bps, organism, drug)
-            if mic_s is None or mic_r is None:
-                print(f"No breakpoints found for {organism} and {drug}. Skipping...")
+            bp_s, bp_r = get_mic_breakpoints(df_bps, organism, drug)
+            if bp_s is None or bp_r is None:
+                logger.info(f"No breakpoints found for {organism} and {drug}. Skipping...")
                 continue
 
-            # get the number of 'not defined' resistance phenotype samples
-            num_not_defined = len(df_new[df_new['Resistance phenotype'] == 'not defined'])
-            
             # iterate through the not defined samples and classify them
-            for index, row in tqdm(df_new[df_new['Resistance phenotype'] == 'not defined'].iterrows(), total=num_not_defined, desc=f"\nProcessing {drug}"):
-                if is_resistant(row, mic_r):
-                    df_new.at[index, 'Resistance phenotype'] = 'resistant'
-                elif is_susceptible(row, mic_s):
-                    df_new.at[index, 'Resistance phenotype'] = 'susceptible'
+            for index, row in tqdm(df_new.iterrows(), total=len(df_new), desc="Revising Phenotype values"):
+                if is_resistant(row, bp_r):
+                    df_new.at[index, 'Phenotype_revised'] = 'resistant'
+                elif is_susceptible(row, bp_s):
+                    df_new.at[index, 'Phenotype_revised'] = 'susceptible'
                 else:
                     # drop the sample if it doesn't match either
-                    print(f"Dropping sample {index} for {drug} as it doesn't match the MIC criteria.")
+                    logger.info(f"Dropping sample {index} for {drug} as it doesn't match the CLSI Breakpoint criteria.")
+                    logger.info(f"Raw data show: '{row['Resistance phenotype']}' with {row['Measurement sign']} {row['MIC (mg/L)']} MIC (mg/L), but BP for {drug} is S: {bp_s}, R: {bp_r}.")
                     df_new.drop(index, inplace=True)
-                    
-            # check if there any 'not defined' samples left
-            if len(df_new[df_new['Resistance phenotype'] == 'not defined']) > 0:
-                print(f"Warning: There are still {len(df_new[df_new['Resistance phenotype'] == 'not defined'])} samples with 'not defined' resistance phenotype for {drug}.")
 
-            # for the remaining samples, filter them
-            df_filtered = df_new[(df_new.apply(lambda row: is_resistant(row, mic_r), axis=1)) | 
-                                (df_new.apply(lambda row: is_susceptible(row, mic_s), axis=1))]
+            # check if there any nan values in the 'Phenotype_revised' column
+            if df_new['Phenotype_revised'].isna().any():
+                logger.info(f"Warning: There are {df_new['Phenotype_revised'].isna().sum()} samples with NaN phenotype for {drug}.")
+                # # fill the NaN values with 'not defined'
+                # df_new['Phenotype_revised'].fillna('not defined', inplace=True)
 
-            num_resistant = len(df_filtered[df_filtered['Resistance phenotype'] == 'resistant'])
-            num_susceptible = len(df_filtered[df_filtered['Resistance phenotype'] == 'susceptible'])
-            num_not_defined = len(df_filtered[df_filtered['Resistance phenotype'] == 'not defined'])
+            num_resistant = len(df_new[df_new['Phenotype_revised'] == 'resistant'])
+            num_susceptible = len(df_new[df_new['Phenotype_revised'] == 'susceptible'])
 
             if num_resistant < 50 or num_susceptible < 50:
                 logger.info(f"Warning: Not enough samples for {drug}. Resistant: {num_resistant}, Susceptible: {num_susceptible}.")
