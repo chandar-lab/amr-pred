@@ -51,7 +51,7 @@ def plot_umap(X, y, metric='cosine', title=None, save_path=None):
     unique_labels = np.unique(y)
 
     plt.figure(figsize=(8, 6))
-    scatter = plt.scatter(X[:, 0], X[:, 1], c=y, cmap='Spectral', s=7)
+    scatter = plt.scatter(X_umap[:, 0], X_umap[:, 1], c=y, cmap='Spectral', s=7)
     plt.xlabel('UMAP 1')
     plt.ylabel('UMAP 2')
     plt.xticks([])
