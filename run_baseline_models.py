@@ -19,7 +19,7 @@ from sklearn.metrics import (
     balanced_accuracy_score, classification_report,
     confusion_matrix
 )
-from kmer import KmerFeatures
+from preprocessing.kmer import KmerFeatures
 
 
 # TODO: 
@@ -51,8 +51,7 @@ def load_data(path_data_csv, path_root_fna):
     df_data = pd.read_csv(path_data_csv)
     specie_drug_assemblies = df_data['Assembly'].tolist()
     # get the corresponding phenotypic labels for each assembly
-    phenotypes = df_data['Resistance phenotype'].tolist()
-    # print(phenotypes)
+    phenotypes = df_data['Phenotype_revised'].tolist()
 
     dataset_list = []
     for assembly, phenotype in zip(specie_drug_assemblies, phenotypes):
@@ -63,7 +62,7 @@ def load_data(path_data_csv, path_root_fna):
             logging.info(f"WARNING: No .fna file found for assembly {assembly}. Skipping this entry.")
             continue
 
-        temp_dict["seq"] = fname[0]
+        temp_dict["seq"] = fname[0] 
         temp_dict["label"] = LABEL_MAPPING[phenotype]
         dataset_list.append(temp_dict)
     
@@ -147,12 +146,12 @@ def main():
     path_data_csv = args.path_csv
 
     now = datetime.now().strftime(f"%Y%m%d-%H%M%S")
-    path_out = os.path.join("/home/mila/n/naga-karthik.enamundram/genomicFMs/results", now)
+    path_out = os.path.join("/home/mila/a/aselstya/scratch/amr/results", now)
     os.makedirs(path_out, exist_ok=True)
 
-    path_root_fna = "/home/mila/n/naga-karthik.enamundram/scratch/dataset_ncbi_asts"
+    #path_root_fna = "/home/mila/a/aselstya/scratch/amr_genomic_data"
     # dataset = "neisseria_gonorrhoeae__azithromycin.csv"
-    dataset = f"{args.pathogen}__{args.antibiotic}.csv"
+    dataset = f"{args.pathogen}/filtered/{args.pathogen}__{args.antibiotic}_SR_filt.csv"
     path_data_csv = os.path.join(args.path_csv, dataset)
     if not os.path.isfile(path_data_csv):
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")

@@ -4,7 +4,7 @@ import numpy as np
 import logging
 from scipy.sparse import csr_matrix
 from tqdm import tqdm
-from preprocessing.utils import efficient_svd, plot_umap
+from preprocessing.utils import efficient_svd#, plot_umap
 
 
 class KmerFeatures:
