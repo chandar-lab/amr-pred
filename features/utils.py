@@ -71,5 +71,5 @@ def plot_umap(X, y, metric='cosine', title=None, save_path=None):
 #         plt.title(title)
 #     if save_path:
 #         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    
+#     #test
 #     plt.show()
