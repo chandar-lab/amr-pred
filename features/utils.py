@@ -2,6 +2,7 @@ import numpy as np
 from scipy import sparse
 from sklearn.decomposition import TruncatedSVD
 import matplotlib.pyplot as plt
+import umap
 
 
 # TODO: change the name of the function
@@ -49,13 +50,22 @@ def efficient_svd(X_sparse, k):
 #     X_umap = reducer.fit_transform(X)
 #     unique_labels = np.unique(y)
 
-#     plt.figure(figsize=(8, 6))
-#     scatter = plt.scatter(X[:, 0], X[:, 1], c=y, cmap='Spectral', s=7)
-#     plt.xlabel('UMAP 1')
-#     plt.ylabel('UMAP 2')
-#     plt.xticks([])
-#     plt.yticks([])
-#     plt.colorbar(boundaries=np.arange(len(unique_labels)+1)-0.5).set_ticks(np.arange(len(unique_labels)))
+def plot_umap(X, y, metric='cosine', title=None, save_path=None):
+    """
+    Plots UMAP projection of the data.
+    """
+    # NOTE: do not use random_state because it hard-codes n_jobs=1 to be deterministic
+    reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, metric=metric)
+    X_umap = reducer.fit_transform(X)
+    unique_labels = np.unique(y)
+
+    plt.figure(figsize=(8, 6))
+    scatter = plt.scatter(X_umap[:, 0], X_umap[:, 1], c=y, cmap='Spectral', s=7)
+    plt.xlabel('UMAP 1')
+    plt.ylabel('UMAP 2')
+    plt.xticks([])
+    plt.yticks([])
+    plt.colorbar(boundaries=np.arange(len(unique_labels)+1)-0.5).set_ticks(np.arange(len(unique_labels)))
     
 #     if title:
 #         plt.title(title)

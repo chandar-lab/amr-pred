@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import multiprocessing as mp
 import xgboost as xgb
 from datetime import datetime
+import time
 
 from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -19,7 +20,8 @@ from sklearn.metrics import (
     balanced_accuracy_score, classification_report,
     confusion_matrix
 )
-from preprocessing.kmer import KmerFeatures
+from features.kmer import KmerFeatures
+from features.utils import plot_umap
 
 
 # TODO: 
@@ -40,9 +42,11 @@ def get_parser():
     parser.add_argument("--path-csv", type=str, required=True, help="Path to the folder containing CSV files for each specie-drug combination")
     parser.add_argument("--pathogen", type=str, help="Pathogen name (lowercase, separated by underscores) e.g. neisseria_gonorrhoeae")
     parser.add_argument("--antibiotic", type=str, help="Antibiotic name (lowercase) e.g. azithromycin")
-    parser.add_argument("--k", type=int, default=8, help="Length of k-mers to extract (default: 8)")
     parser.add_argument("--path-precomputed", type=str, default=None, help="Path to precomputed k-mer matrix (optional)")
-    
+    parser.add_argument("--k", type=int, default=8, help="Length of k-mers to extract (default: 8)")
+    parser.add_argument("--feat-mode", type=str, default="count", choices=["binary", "count", "entropy"], help="Mode for k-mer extraction (default: count)")
+    parser.add_argument("--debug",  action='store_true', help="Enable debug mode for verbose logging")
+
     return parser
 
 
@@ -52,6 +56,7 @@ def load_data(path_data_csv, path_root_fna):
     specie_drug_assemblies = df_data['Assembly'].tolist()
     # get the corresponding phenotypic labels for each assembly
     phenotypes = df_data['Phenotype_revised'].tolist()
+    # print(phenotypes)
 
     dataset_list = []
     for assembly, phenotype in zip(specie_drug_assemblies, phenotypes):
@@ -75,12 +80,13 @@ def fitmodel_nestedcv(X, pheno, estimator, parameters, modelname, path_out=None)
     outer_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
 
     all_scores = []
-    all_reports = []
+    # all_reports = []
+    very_major_errors, major_errors = [], []
     all_conf_matrices = []
     fold_times = []
     best_fold_index = -1
 
-    logging.info(f" Starting CV for {modelname}...")
+    logging.info(f"Starting CV for {modelname}...")
 
     for fold_idx, (train_idx, test_idx) in enumerate(outer_cv.split(X, pheno)):
         start = time.process_time()
@@ -88,40 +94,56 @@ def fitmodel_nestedcv(X, pheno, estimator, parameters, modelname, path_out=None)
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = pheno[train_idx], pheno[test_idx]
 
-        estimator.fit(X_train, y_train)
-        y_pred = estimator.predict(X_test)
+        # estimator.fit(X_train, y_train)
+        # y_pred = estimator.predict(X_test)
 
-        # grid = GridSearchCV(estimator=estimator,
-        #                     param_grid=parameters,
-        #                     scoring='balanced_accuracy',
-        #                     cv=5, # uses StratifiedKFold
-        #                     n_jobs=(mp.cpu_count()//4),
-        #                     )
-        # grid.fit(X_train, y_train)
+        grid = GridSearchCV(
+            estimator=estimator, 
+            param_grid=parameters, 
+            scoring='balanced_accuracy',
+            cv=5, # uses StratifiedKFold
+        )
+        grid.fit(X_train, y_train)
 
-        # best_model = grid.best_estimator_
-        # y_pred = best_model.predict(X_test)
+        best_model = grid.best_estimator_
+        y_pred = best_model.predict(X_test)
+
+        logging.info(f"Best parameters in fold {fold_idx+1}: {grid.best_params_}")
 
         score = balanced_accuracy_score(y_test, y_pred)
         report = classification_report(y_test, y_pred, digits=4)
         cm = confusion_matrix(y_test, y_pred)
 
+        tn, fp, fn, tp = cm.ravel()
+        
+        # Compute Very Major Error and Major Error
+        # NOTE: # VME is the false negative rate; proportion of resistant samples misclassified as susceptible; aka Type II error
+        # ME is the false positive rate; proportion of susceptible samples misclassified as resistant; aka Type I error
+        # To be cleared for marketing in the USA, the FDA requires that VMEs attributable to a test device should be <1.5% for individual species/drug comparisons, 
+        # MEs should not exceed 3%, and an overall essential MIC agreement of >90% of device MICs within one doubling dilution of a CLSI reference MIC.
+        # More info: https://academic.oup.com/cid/article-abstract/49/11/1749/344384
+        vme = fn / (fn + tp) if (fn + tp) > 0 else 0
+        me = fp / (fp + tn) if (fp + tn) > 0 else 0
+
         all_scores.append(score)
-        all_reports.append(report)
+        # all_reports.append(report)
         all_conf_matrices.append(cm)
+        very_major_errors.append(vme)
+        major_errors.append(me)
         fold_times.append(time.process_time() - start)
 
         logging.info(f"\n Fold {fold_idx+1} - Balanced Accuracy: {score:.3f}")
-        # TODO: what are 0 and 1 ?
+        logging.info(f"Very Major Error (VME): {(vme)*100:.2f}% |  Major Error (ME): {(me)*100:.2f}%")
         logging.info(f"\n {report}")
-        # logging.info("Confusion Matrix:\n", cm)
 
         if score == max(all_scores):
             best_fold_index = fold_idx
 
-    logging.info(f"\n {modelname} Nested CV Summary:")
-    logging.info(f"Mean Balanced Accuracy: {np.mean(all_scores):.3f} ± {np.std(all_scores):.3f}")
-    logging.info(f"Avg Fold Time: {np.mean(fold_times):.2f}s")
+    logging.info(f"{modelname} Nested CV Summary:")
+    logging.info(f"\tMean Balanced Accuracy: {np.mean(all_scores):.3f} ± {np.std(all_scores):.3f}")
+    logging.info(f"\tMean Very Major Error (VME): {np.mean(very_major_errors)*100:.2f}% ± {np.std(very_major_errors)*100:.2f}%")
+    logging.info(f"\tMean Major Error (ME): {np.mean(major_errors)*100:.2f}% ± {np.std(major_errors)*100:.2f}%")
+    logging.info(f"\tAvg Fold Time: {np.mean(fold_times):.2f}s")
 
     # Plot best confusion matrix
     best_cm = all_conf_matrices[best_fold_index]
@@ -134,7 +156,7 @@ def fitmodel_nestedcv(X, pheno, estimator, parameters, modelname, path_out=None)
     plt.tight_layout()
     plt.savefig(os.path.join(path_out, f"{modelname}_best_cm.png"), dpi=300)
 
-    return all_scores, all_reports, all_conf_matrices
+    return very_major_errors, major_errors, all_conf_matrices
 
 
 def main():
@@ -144,19 +166,26 @@ def main():
     args = parser.parse_args()
     path_root_fna = args.path_dataroot
     path_data_csv = args.path_csv
+    
+    # Parameters
+    k = args.k
+    feature_mode = args.feat_mode
+    min_kmer_freq = 3                   # Minimum frequency of k-mers to consider
 
-    now = datetime.now().strftime(f"%Y%m%d-%H%M%S")
-    path_out = os.path.join("/home/mila/a/aselstya/scratch/amr/results", now)
+    now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
+    path_out = os.path.join("/home/mila/a/aselstya/scratch/amr/results", now.split('_')[0], now.split('_')[1])
     os.makedirs(path_out, exist_ok=True)
 
-    #path_root_fna = "/home/mila/a/aselstya/scratch/amr_genomic_data"
+    
     # dataset = "neisseria_gonorrhoeae__azithromycin.csv"
     dataset = f"{args.pathogen}/filtered/{args.pathogen}__{args.antibiotic}_SR_filt.csv"
     path_data_csv = os.path.join(args.path_csv, dataset)
     if not os.path.isfile(path_data_csv):
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
 
-    file_handler = logging.FileHandler(os.path.join(path_out, f"log__{args.pathogen}__{args.antibiotic}__k{args.k}.txt"))
+    patho_short = f"{args.pathogen.split('_')[0][0]}_{args.pathogen.split('_')[1]}"
+    fname = f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__minFreq_{min_kmer_freq}"
+    file_handler = logging.FileHandler(os.path.join(path_out, f"log__{fname}.txt"))
     console_handler = logging.StreamHandler()
 
     logging.basicConfig(
@@ -168,40 +197,49 @@ def main():
     logging.info(f"Training on {args.pathogen} for {args.antibiotic} using k-mers of length {args.k} ...")
 
     # NOTE: this is a list of dicts pointing for the paths to the genomic sequences (.fna files) and the corresponding S/R labels
-    dataset_list = load_data(path_data_csv, path_root_fna)
-
-    # Parameters
-    k = args.k
+    if args.debug:
+        dataset_list = load_data(path_data_csv, path_root_fna)[:75]  # Load only first 75 samples for debugging
+    else:
+        dataset_list = load_data(path_data_csv, path_root_fna)
 
     logging.info("Initializing K-mer class to build feature matrix ...")
-    builder = KmerFeatures(k=k, mode="count", path_precomputed=args.path_precomputed)
-
+    kmer_features = KmerFeatures(
+        k=k, 
+        mode=feature_mode,
+        min_kmer_freq=min_kmer_freq,            # Higher threshold to reduce features
+        use_canonical=True,                     # Use canonical k-mers (~50% reduction)
+        max_features=1000000,                   # Limit to top 1M most frequent k-mers
+        batch_size=256,                         # Smaller batches for memory management
+        memory_efficient=True,                  # Enable memory optimizations
+        path_precomputed=args.path_precomputed, # Path to precomputed k-mer matrix
+        reduce_dimensionality=False             # Disable dimensionality reduction for now
+    )
     # # Analyze k-mer repetition
     # repetition_stats = builder.analyze_kmer_repetition(dataset_list, top_n=20, output_file="None")
     
     # Build feature matrix
-    X, y = builder.build_feature_matrix(dataset=dataset_list)
+    X, y = kmer_features.build_feature_matrix(dataset=dataset_list)
     logging.info(f"Feature matrix shape: {X.shape}")
     logging.info(f"Number of samples: {X.shape[0]}")
 
     # save the matrix to a file
     if args.path_precomputed is None:
-        save_fname = os.path.join(args.path_csv, f"{args.pathogen}__{args.antibiotic}__k{k}.npz")
-        np.savez_compressed(save_fname, data=X.data, indices=X.indices, indptr=X.indptr, shape=X.shape)
-
+        save_fname = os.path.join(args.path_csv, f"{fname}.npz")
+        kmer_features.save_matrix(X, y, save_fname)
         logging.info(f"Feature matrix saved to {save_fname}")
 
-    # # Print information about the sparse matrix
-    # sparse_bytes = X.data.nbytes + X.indptr.nbytes + X.indices.nbytes
-    # print(f"Feature matrix shape: {X.shape}")
-    # print(f"Number of non-zero elements: {X.nnz}")
-    # print(f"Sparsity: {X.nnz / (X.shape[0] * X.shape[1]):.6f}")
-    # print(f"Memory usage: {sparse_bytes} bytes or {sparse_bytes / 1e9:.2f} GB")
+    if args.debug:
+        # plot UMAP of the feature matrix with different metrics
+        # metrics = ["jaccard", "rogerstanimoto", "euclidean", "canberra", "cosine"]
+        metrics = ["jaccard", "cosine"]
+        for metric in metrics:
+            logging.info(f"Plotting UMAP with metric: {metric}")
+            start_time = time.time()
+            plot_umap(X, y, metric=metric,
+                    title=f"UMAP of feature matrix; K: {k}; Mode: {feature_mode}; Metric: {metric}", 
+                    save_path=os.path.join(path_out, f"umap__{fname}__{metric}.png"))
+            logging.info(f"UMAP plot for {metric} completed in {time.time() - start_time:.2f} seconds")
 
-    # # Compare to what a dense matrix would use
-    # dense_bytes = X.shape[0] * X.shape[1] * 8  # 8 bytes per float64
-    # print(f"Equivalent dense matrix would use: {dense_bytes} bytes or {dense_bytes / 1e9:.2f} GB")
-    # print(f"Memory savings: {dense_bytes / (sparse_bytes):.1f}x")
 
     # # ==========
     # # logistic regression
@@ -239,22 +277,22 @@ def main():
     # # print("Training XGBoost model...")
     xgb_model = xgb.XGBClassifier(
         objective="binary:logistic",
-        use_label_encoder=False,
+        # use_label_encoder=False,
         eval_metric="logloss",
         n_jobs=-1,
         # verbosity=1
     )
-    # xgb_params = {
-    # 'alpha': [1e-5, 1e-4], 
-    # 'colsample_bytree': [0.6],
-    # 'gamma': [0.05, 0.1], 
-    # 'learning_rate': [0.01, 0.1], 
-    # 'max_depth': [2],
-    # 'subsample': [0.2, 0.4, 0.6]
-    # }
+    xgb_params = {
+    'alpha': [1e-5, 1e-4], 
+    'colsample_bytree': [0.6],
+    'gamma': [0.05, 0.1], 
+    'learning_rate': [0.01, 0.1], 
+    'max_depth': [2],
+    'subsample': [0.2, 0.4, 0.6]
+    }
 
     xgb_scores, xgb_reports, xgb_conf_matrices = fitmodel_nestedcv(
-        X, y, xgb_model, None, "XGBoost", path_out
+        X, y, xgb_model, xgb_params, "XGBoost", path_out
     )
 
     # # Evaluation
