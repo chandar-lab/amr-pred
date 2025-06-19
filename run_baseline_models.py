@@ -43,9 +43,12 @@ def get_parser():
     parser.add_argument("--pathogen", type=str, help="Pathogen name (lowercase, separated by underscores) e.g. neisseria_gonorrhoeae")
     parser.add_argument("--antibiotic", type=str, help="Antibiotic name (lowercase) e.g. azithromycin")
     parser.add_argument("--path-precomputed", type=str, default=None, help="Path to precomputed k-mer matrix (optional)")
+    parser.add_argument("--debug",  action='store_true', help="Enable debug mode for verbose logging")
     parser.add_argument("--k", type=int, default=8, help="Length of k-mers to extract (default: 8)")
     parser.add_argument("--feat-mode", type=str, default="count", choices=["binary", "count", "entropy"], help="Mode for k-mer extraction (default: count)")
-    parser.add_argument("--debug",  action='store_true', help="Enable debug mode for verbose logging")
+    parser.add_argument("--min-kmer-freq", type=int, default=3, help="Minimum frequency of k-mers to consider (default: 3)")
+    parser.add_argument("--feat-selection", type=str, default="combined", choices=["combined", "variance", "chi2", "f_classif"], help="Feature selection method (default: combined)")
+    parser.add_argument("--feat-k", type=int, default=500000, help="Number of features to select for thresholding (default: 500K)")
 
     return parser
 
@@ -170,7 +173,9 @@ def main():
     # Parameters
     k = args.k
     feature_mode = args.feat_mode
-    min_kmer_freq = 3                   # Minimum frequency of k-mers to consider
+    min_kmer_freq = args.min_kmer_freq
+    feature_selection_method = args.feat_selection
+    feature_selection_k = args.feat_k
 
     now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
     path_out = os.path.join("/home/mila/n/naga-karthik.enamundram/genomicFMs/results", now.split('_')[0], now.split('_')[1])
@@ -184,7 +189,7 @@ def main():
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
 
     patho_short = f"{args.pathogen.split('_')[0][0]}_{args.pathogen.split('_')[1]}"
-    fname = f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__minFreq_{min_kmer_freq}"
+    fname = f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__minFreq_{min_kmer_freq}__thr_{feature_selection_method}__featK_{(feature_selection_k//1000)}K"
     file_handler = logging.FileHandler(os.path.join(path_out, f"log__{fname}.txt"))
     console_handler = logging.StreamHandler()
 
@@ -204,18 +209,28 @@ def main():
 
     logging.info("Initializing K-mer class to build feature matrix ...")
     kmer_features = KmerFeatures(
-        k=k, 
-        mode=feature_mode,
-        min_kmer_freq=min_kmer_freq,            # Higher threshold to reduce features
-        use_canonical=True,                     # Use canonical k-mers (~50% reduction)
-        max_features=1000000,                   # Limit to top 1M most frequent k-mers
-        batch_size=256,                         # Smaller batches for memory management
-        memory_efficient=True,                  # Enable memory optimizations
-        path_precomputed=args.path_precomputed, # Path to precomputed k-mer matrix
-        reduce_dimensionality=False             # Disable dimensionality reduction for now
+        k=k,
+        mode=feature_mode,                                      # Essential for resistance gene dosage effects
+        min_kmer_freq=min_kmer_freq,                            # Capture rare but critical resistance variants
+        feature_selection_method=feature_selection_method,      # Best of both worlds
+        variance_threshold=0.0,                                # Very permissive variance filtering
+        feature_selection_k=feature_selection_k,                # Large feature set for complex resistance
+        max_features=3000000,                                   # Very wide initial net for diverse mechanisms
+        batch_size=256,                                         # Smaller batches for memory efficiency
+        memory_efficient=True,
+        use_canonical=True
     )
-    # # Analyze k-mer repetition
-    # repetition_stats = builder.analyze_kmer_repetition(dataset_list, top_n=20, output_file="None")
+    # kmer_features = KmerFeatures(
+    #     k=k, 
+    #     mode=feature_mode,
+    #     min_kmer_freq=min_kmer_freq,            # Higher threshold to reduce features
+    #     use_canonical=True,                     # Use canonical k-mers (~50% reduction)
+    #     max_features=1000000,                   # Limit to top 1M most frequent k-mers
+    #     batch_size=256,                         # Smaller batches for memory management
+    #     memory_efficient=True,                  # Enable memory optimizations
+    #     path_precomputed=args.path_precomputed, # Path to precomputed k-mer matrix
+    #     reduce_dimensionality=False             # Disable dimensionality reduction for now
+    # )
     
     # Build feature matrix
     X, y = kmer_features.build_feature_matrix(dataset=dataset_list)
@@ -283,12 +298,11 @@ def main():
         # verbosity=1
     )
     xgb_params = {
-    'alpha': [1e-5, 1e-4], 
-    'colsample_bytree': [0.6],
-    'gamma': [0.05, 0.1], 
-    'learning_rate': [0.01, 0.1], 
-    'max_depth': [2],
-    'subsample': [0.2, 0.4, 0.6]
+        'learning_rate': [0.1],              # Fix at good default
+        'max_depth': [3],                 # Most important for genomic data
+        'subsample': [0.8],            # Key for preventing overfitting
+        'colsample_bytree': [0.6, 0.8],     # Important for k-mer features
+        'gamma': [0.1],                  # Simple regularization choice
     }
 
     xgb_scores, xgb_reports, xgb_conf_matrices = fitmodel_nestedcv(
