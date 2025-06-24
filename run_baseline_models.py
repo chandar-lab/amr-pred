@@ -46,9 +46,7 @@ def get_parser():
     parser.add_argument("--debug",  action='store_true', help="Enable debug mode for verbose logging")
     parser.add_argument("--k", type=int, default=8, help="Length of k-mers to extract (default: 8)")
     parser.add_argument("--feat-mode", type=str, default="count", choices=["binary", "count", "entropy"], help="Mode for k-mer extraction (default: count)")
-    parser.add_argument("--min-kmer-freq", type=int, default=3, help="Minimum frequency of k-mers to consider (default: 3)")
-    parser.add_argument("--feat-selection", type=str, default="combined", choices=["combined", "variance", "chi2", "f_classif"], help="Feature selection method (default: combined)")
-    parser.add_argument("--feat-k", type=int, default=500000, help="Number of features to select for thresholding (default: 500K)")
+    parser.add_argument("--max-features", type=int, default=1000000, help="Maximum number of top most frequent k-mers to extract (default: 1M)")
 
     return parser
 
@@ -173,9 +171,8 @@ def main():
     # Parameters
     k = args.k
     feature_mode = args.feat_mode
-    min_kmer_freq = args.min_kmer_freq
-    feature_selection_method = args.feat_selection
-    feature_selection_k = args.feat_k
+    max_features = args.max_features
+    min_kmer_freq = 1   # removes extremely rare k-mers occurring only once
 
     now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
     path_out = os.path.join("/home/mila/n/naga-karthik.enamundram/genomicFMs/results", now.split('_')[0], now.split('_')[1])
@@ -211,26 +208,12 @@ def main():
     kmer_features = KmerFeatures(
         k=k,
         mode=feature_mode,                                      # Essential for resistance gene dosage effects
-        min_kmer_freq=min_kmer_freq,                            # Capture rare but critical resistance variants
-        feature_selection_method=feature_selection_method,      # Best of both worlds
-        variance_threshold=0.0,                                # Very permissive variance filtering
-        feature_selection_k=feature_selection_k,                # Large feature set for complex resistance
-        max_features=3000000,                                   # Very wide initial net for diverse mechanisms
+        min_kmer_freq=min_kmer_freq,                            # Remove extremely rare k-mers
+        max_features=max_features,                                   # Very wide initial net for diverse mechanisms
         batch_size=256,                                         # Smaller batches for memory efficiency
         memory_efficient=True,
         use_canonical=True
     )
-    # kmer_features = KmerFeatures(
-    #     k=k, 
-    #     mode=feature_mode,
-    #     min_kmer_freq=min_kmer_freq,            # Higher threshold to reduce features
-    #     use_canonical=True,                     # Use canonical k-mers (~50% reduction)
-    #     max_features=1000000,                   # Limit to top 1M most frequent k-mers
-    #     batch_size=256,                         # Smaller batches for memory management
-    #     memory_efficient=True,                  # Enable memory optimizations
-    #     path_precomputed=args.path_precomputed, # Path to precomputed k-mer matrix
-    #     reduce_dimensionality=False             # Disable dimensionality reduction for now
-    # )
     
     # Build feature matrix
     X, y = kmer_features.build_feature_matrix(dataset=dataset_list)
