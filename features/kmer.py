@@ -135,11 +135,10 @@ class KmerFeatures:
                     kmer_dict = {k: v / total_count for k, v in kmer_dict.items()}
             
             for kmer, val in kmer_dict.items():
-                if kmer in kmer_to_col_map:
-                    col_idx = self.kmer_to_col[kmer]
-                    rows.append(row_idx)
-                    cols.append(col_idx)
-                    data.append(val)
+                col_idx = self.kmer_to_col[kmer]
+                rows.append(row_idx)
+                cols.append(col_idx)
+                data.append(val)
         
         return data, rows, cols
 
