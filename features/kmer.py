@@ -46,8 +46,6 @@ class KmerFeatures:
         # For two-pass approach
         self.kmer_global_counts = Counter()
         self.selected_kmers = set()
-        self.feature_selector = None
-        self.selected_feature_indices = None
 
     def _reverse_complement(self, seq):
         """Get reverse complement of DNA sequence."""
