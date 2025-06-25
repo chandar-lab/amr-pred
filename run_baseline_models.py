@@ -197,26 +197,34 @@ def main():
     args = parser.parse_args()
     path_root_fna = args.path_dataroot
     path_data_csv = args.path_csv
-    
-    # Parameters
-    k = args.k
-    feature_mode = args.feat_mode
-    max_features = args.max_features
-    min_kmer_freq = 1   # removes extremely rare k-mers occurring only once
 
-    now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
-    path_out = os.path.join("/home/mila/n/naga-karthik.enamundram/genomicFMs/results", now.split('_')[0], now.split('_')[1])
-    os.makedirs(path_out, exist_ok=True)
-
-    
     # dataset = "neisseria_gonorrhoeae__azithromycin.csv"
     dataset = f"{args.pathogen}__{args.antibiotic}_SR_filt.csv"
     path_data_csv = os.path.join(args.path_csv, dataset)
     if not os.path.isfile(path_data_csv):
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
 
+    now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
+    path_out = os.path.join("/home/mila/n/naga-karthik.enamundram/genomicFMs/results", now.split('_')[0], now.split('_')[1])
+    os.makedirs(path_out, exist_ok=True)
+
+    # Parameters
+    min_kmer_freq = 2   # filters out k-mers that appear less than at least this many times in the dataset
+    if args.path_precomputed is not None:
+        if not os.path.isfile(args.path_precomputed):
+            raise FileNotFoundError(f"Precomputed file not found: {args.path_precomputed}")
+        
+        # Extract k, feature mode, and max features from the filename
+        k = int(args.path_precomputed.split('__')[2].split('_')[1])
+        feature_mode = args.path_precomputed.split('__')[3].split('_')[1]
+        max_features = int(args.path_precomputed.split('__')[4].split('_')[1].split('.')[0][:-1]) * 1000
+    else:        
+        k = args.k
+        feature_mode = args.feat_mode
+        max_features = args.max_features
+
     patho_short = f"{args.pathogen.split('_')[0][0]}_{args.pathogen.split('_')[1]}"
-    fname = f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__minFreq_{min_kmer_freq}__thr_{feature_selection_method}__featK_{(feature_selection_k//1000)}K"
+    fname = f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__feat_{(max_features//1000)}K"
     file_handler = logging.FileHandler(os.path.join(path_out, f"log__{fname}.txt"))
     console_handler = logging.StreamHandler()
 
@@ -225,6 +233,8 @@ def main():
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[file_handler, console_handler]
     )
+    if args.path_precomputed is not None:
+        logging.info(f"Using precomputed k-mer matrix from {args.path_precomputed}")
 
     logging.info(f"Training on {args.pathogen} for {args.antibiotic} using k-mers of length {args.k} ...")
 
