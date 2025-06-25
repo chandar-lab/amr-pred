@@ -11,11 +11,11 @@ import multiprocessing as mp
 import xgboost as xgb
 from datetime import datetime
 import time
+import pickle
 
 from sklearn.base import clone
 from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import StratifiedKFold, GridSearchCV
 from sklearn.metrics import (
     balanced_accuracy_score, classification_report, confusion_matrix
@@ -47,6 +47,7 @@ def get_parser():
     parser.add_argument("--k", type=int, default=8, help="Length of k-mers to extract (default: 8)")
     parser.add_argument("--feat-mode", type=str, default="count", choices=["binary", "count", "entropy"], help="Mode for k-mer extraction (default: count)")
     parser.add_argument("--max-features", type=int, default=1000000, help="Maximum number of top most frequent k-mers to extract (default: 1M)")
+    parser.add_argument("--use-sparse", action='store_true', help="Use sparse matrix for k-mer features (default: False)")
 
     return parser
 
@@ -82,7 +83,6 @@ def fitmodel_nestedcv(X, pheno, estimator, parameters, modelname, path_out=None)
 
     bal_acc_scores, f1_macro_scores = [], []
     very_major_errors, major_errors = [], []
-    all_conf_matrices = []
     fold_times = []
 
     # Track best model information
@@ -251,8 +251,10 @@ def main():
         min_kmer_freq=min_kmer_freq,                            # Remove extremely rare k-mers
         max_features=max_features,                                   # Very wide initial net for diverse mechanisms
         batch_size=256,                                         # Smaller batches for memory efficiency
-        memory_efficient=True,
-        use_canonical=True
+        use_canonical=True,
+        use_sparse=args.use_sparse,                            # Use sparse matrix for k-mer features
+        path_precomputed=args.path_precomputed,                 # Path to precomputed k-mer matrix if available
+        path_kmers=os.path.join(args.path_csv, f"{patho_short}__{args.antibiotic}__k_{k}.pkl"),
     )
     
     # Build feature matrix
