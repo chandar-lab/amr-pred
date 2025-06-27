@@ -11,14 +11,14 @@ import multiprocessing as mp
 import xgboost as xgb
 from datetime import datetime
 import time
+import pickle
 
+from sklearn.base import clone
 from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import StratifiedKFold, GridSearchCV
 from sklearn.metrics import (
-    balanced_accuracy_score, classification_report,
-    confusion_matrix
+    balanced_accuracy_score, classification_report, confusion_matrix
 )
 from features.kmer import KmerFeatures
 from features.utils import plot_umap
@@ -43,9 +43,11 @@ def get_parser():
     parser.add_argument("--pathogen", type=str, help="Pathogen name (lowercase, separated by underscores) e.g. neisseria_gonorrhoeae")
     parser.add_argument("--antibiotic", type=str, help="Antibiotic name (lowercase) e.g. azithromycin")
     parser.add_argument("--path-precomputed", type=str, default=None, help="Path to precomputed k-mer matrix (optional)")
+    parser.add_argument("--debug",  action='store_true', help="Enable debug mode for verbose logging")
     parser.add_argument("--k", type=int, default=8, help="Length of k-mers to extract (default: 8)")
     parser.add_argument("--feat-mode", type=str, default="count", choices=["binary", "count", "entropy"], help="Mode for k-mer extraction (default: count)")
-    parser.add_argument("--debug",  action='store_true', help="Enable debug mode for verbose logging")
+    parser.add_argument("--max-features", type=int, default=1000000, help="Maximum number of top most frequent k-mers to extract (default: 1M)")
+    parser.add_argument("--use-sparse", action='store_true', help="Use sparse matrix for k-mer features (default: False)")
 
     return parser
 
@@ -79,84 +81,113 @@ def load_data(path_data_csv, path_root_fna):
 def fitmodel_nestedcv(X, pheno, estimator, parameters, modelname, path_out=None):
     outer_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
 
-    all_scores = []
-    # all_reports = []
+    bal_acc_scores, f1_macro_scores = [], []
     very_major_errors, major_errors = [], []
-    all_conf_matrices = []
     fold_times = []
-    best_fold_index = -1
+
+    # Track best model information
+    best_score = -1
+    best_model = None
+    best_y_test = None
+    best_y_pred = None
+    best_fold_idx = -1
 
     logging.info(f"Starting CV for {modelname}...")
-
     for fold_idx, (train_idx, test_idx) in enumerate(outer_cv.split(X, pheno)):
         start = time.process_time()
 
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = pheno[train_idx], pheno[test_idx]
 
-        # estimator.fit(X_train, y_train)
-        # y_pred = estimator.predict(X_test)
+        if parameters is None:
+            # If no parameters are provided, use the estimator as is
+            logging.info(f"Using default parameters for {modelname} in fold {fold_idx+1}")
+            
+            current_model = clone(estimator)
+            current_model.fit(X_train, y_train)
+            y_pred = current_model.predict(X_test)
 
-        grid = GridSearchCV(
-            estimator=estimator, 
-            param_grid=parameters, 
-            scoring='balanced_accuracy',
-            cv=5, # uses StratifiedKFold
-        )
-        grid.fit(X_train, y_train)
+        else:
+            logging.info(f"Performing GridSearchCV for {modelname} in fold {fold_idx+1}")
+            
+            # Perform grid search to find the best hyperparameters
+            grid = GridSearchCV(
+                estimator=estimator, 
+                param_grid=parameters, 
+                scoring='balanced_accuracy',
+                cv=5, # uses StratifiedKFold
+            )
+            grid.fit(X_train, y_train)
 
-        best_model = grid.best_estimator_
-        y_pred = best_model.predict(X_test)
+            current_model = grid.best_estimator_
+            y_pred = current_model.predict(X_test)
 
-        logging.info(f"Best parameters in fold {fold_idx+1}: {grid.best_params_}")
+            logging.info(f"Best parameters in fold {fold_idx+1}: {grid.best_params_}")
 
         score = balanced_accuracy_score(y_test, y_pred)
-        report = classification_report(y_test, y_pred, digits=4)
+        f1_macro = classification_report(y_test, y_pred, output_dict=True)['macro avg']['f1-score']
         cm = confusion_matrix(y_test, y_pred)
 
-        tn, fp, fn, tp = cm.ravel()
-        
         # Compute Very Major Error and Major Error
         # NOTE: # VME is the false negative rate; proportion of resistant samples misclassified as susceptible; aka Type II error
         # ME is the false positive rate; proportion of susceptible samples misclassified as resistant; aka Type I error
         # To be cleared for marketing in the USA, the FDA requires that VMEs attributable to a test device should be <1.5% for individual species/drug comparisons, 
         # MEs should not exceed 3%, and an overall essential MIC agreement of >90% of device MICs within one doubling dilution of a CLSI reference MIC.
         # More info: https://academic.oup.com/cid/article-abstract/49/11/1749/344384
+
+        tn, fp, fn, tp = cm.ravel()
         vme = fn / (fn + tp) if (fn + tp) > 0 else 0
         me = fp / (fp + tn) if (fp + tn) > 0 else 0
 
-        all_scores.append(score)
-        # all_reports.append(report)
-        all_conf_matrices.append(cm)
+        bal_acc_scores.append(score)
+        f1_macro_scores.append(f1_macro)
         very_major_errors.append(vme)
         major_errors.append(me)
         fold_times.append(time.process_time() - start)
 
-        logging.info(f"\n Fold {fold_idx+1} - Balanced Accuracy: {score:.3f}")
-        logging.info(f"Very Major Error (VME): {(vme)*100:.2f}% |  Major Error (ME): {(me)*100:.2f}%")
-        logging.info(f"\n {report}")
+        # Track best performing fold
+        if score > best_score:
+            best_score = score
+            best_model = current_model
+            best_y_test = y_test.copy()
+            best_y_pred = y_pred.copy()
+            best_fold_idx = fold_idx
 
-        if score == max(all_scores):
-            best_fold_index = fold_idx
+        logging.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f}")
+        logging.info(f"Very Major Error (VME): {(vme)*100:.2f}% | Major Error (ME): {(me)*100:.2f}%")
+
+    # Generate detailed report for best model
+    best_report = classification_report(best_y_test, best_y_pred, digits=4)
+    
+    # Convert classification report to dictionary for easy access/plotting
+    best_report_dict = classification_report(best_y_test, best_y_pred, digits=4, output_dict=True)    
 
     logging.info(f"{modelname} Nested CV Summary:")
-    logging.info(f"\tMean Balanced Accuracy: {np.mean(all_scores):.3f} ± {np.std(all_scores):.3f}")
+    logging.info(f"\tMean Balanced Accuracy: {np.mean(bal_acc_scores):.3f} ± {np.std(bal_acc_scores):.3f}")
+    logging.info(f"\tMean F1 Macro: {np.mean(f1_macro_scores):.3f} ± {np.std(f1_macro_scores):.3f}")
     logging.info(f"\tMean Very Major Error (VME): {np.mean(very_major_errors)*100:.2f}% ± {np.std(very_major_errors)*100:.2f}%")
     logging.info(f"\tMean Major Error (ME): {np.mean(major_errors)*100:.2f}% ± {np.std(major_errors)*100:.2f}%")
     logging.info(f"\tAvg Fold Time: {np.mean(fold_times):.2f}s")
+    logging.info(f"Best Model (Fold {best_fold_idx+1}) - Balanced Accuracy: {best_score:.3f}")
+    logging.info(f"Best Model Classification Report:\n{best_report}")    
 
-    # Plot best confusion matrix
-    best_cm = all_conf_matrices[best_fold_index]
-    plt.figure(figsize=(6, 5))
-    sns.heatmap(best_cm, annot=True, fmt="d", cmap="Blues", cbar=True,
-                xticklabels=["Susceptible", "Resistant"], yticklabels=["Susceptible", "Resistant"])
-    plt.title(f"{modelname} - (Fold {best_fold_index + 1})")
-    plt.xlabel("Predicted Label")
-    plt.ylabel("True Label")
-    plt.tight_layout()
-    plt.savefig(os.path.join(path_out, f"{modelname}_best_cm.png"), dpi=300)
+    # Save results if path provided
+    if path_out:
+        results = {
+            'model_name': modelname,
+            'best_fold_idx': best_fold_idx,
+            'best_score': best_score,
+            'best_classification_report': best_report_dict,
+            # 'best_model': best_model,
+            'balanced_accuracy_scores': bal_acc_scores,
+            'f1_macro_scores': f1_macro_scores,
+        }
+        
+        # Save as pickle for easy loading
+        with open(f"{path_out}.pkl", 'wb') as f:
+            pickle.dump(results, f)    
 
-    return very_major_errors, major_errors, all_conf_matrices
+    return very_major_errors, major_errors
 
 
 def main():
@@ -166,25 +197,34 @@ def main():
     args = parser.parse_args()
     path_root_fna = args.path_dataroot
     path_data_csv = args.path_csv
-    
-    # Parameters
-    k = args.k
-    feature_mode = args.feat_mode
-    min_kmer_freq = 3                   # Minimum frequency of k-mers to consider
 
-    now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
-    path_out = os.path.join("/home/mila/a/aselstya/scratch/amr/results", now.split('_')[0], now.split('_')[1])
-    os.makedirs(path_out, exist_ok=True)
-
-    
     # dataset = "neisseria_gonorrhoeae__azithromycin.csv"
     dataset = f"{args.pathogen}/filtered/{args.pathogen}__{args.antibiotic}_SR_filt.csv"
     path_data_csv = os.path.join(args.path_csv, dataset)
     if not os.path.isfile(path_data_csv):
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
 
+    now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
+    path_out = os.path.join("/home/mila/n/naga-karthik.enamundram/genomicFMs/results", now.split('_')[0], now.split('_')[1])
+    os.makedirs(path_out, exist_ok=True)
+
+    # Parameters
+    min_kmer_freq = 2   # filters out k-mers that appear less than at least this many times in the dataset
+    if args.path_precomputed is not None:
+        if not os.path.isfile(args.path_precomputed):
+            raise FileNotFoundError(f"Precomputed file not found: {args.path_precomputed}")
+        
+        # Extract k, feature mode, and max features from the filename
+        k = int(args.path_precomputed.split('__')[2].split('_')[1])
+        feature_mode = args.path_precomputed.split('__')[3].split('_')[1]
+        max_features = int(args.path_precomputed.split('__')[4].split('_')[1].split('.')[0][:-1]) * 1000
+    else:        
+        k = args.k
+        feature_mode = args.feat_mode
+        max_features = args.max_features
+
     patho_short = f"{args.pathogen.split('_')[0][0]}_{args.pathogen.split('_')[1]}"
-    fname = f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__minFreq_{min_kmer_freq}"
+    fname = f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__feat_{(max_features//1000)}K"
     file_handler = logging.FileHandler(os.path.join(path_out, f"log__{fname}.txt"))
     console_handler = logging.StreamHandler()
 
@@ -193,6 +233,8 @@ def main():
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[file_handler, console_handler]
     )
+    if args.path_precomputed is not None:
+        logging.info(f"Using precomputed k-mer matrix from {args.path_precomputed}")
 
     logging.info(f"Training on {args.pathogen} for {args.antibiotic} using k-mers of length {args.k} ...")
 
@@ -204,18 +246,16 @@ def main():
 
     logging.info("Initializing K-mer class to build feature matrix ...")
     kmer_features = KmerFeatures(
-        k=k, 
-        mode=feature_mode,
-        min_kmer_freq=min_kmer_freq,            # Higher threshold to reduce features
-        use_canonical=True,                     # Use canonical k-mers (~50% reduction)
-        max_features=1000000,                   # Limit to top 1M most frequent k-mers
-        batch_size=256,                         # Smaller batches for memory management
-        memory_efficient=True,                  # Enable memory optimizations
-        path_precomputed=args.path_precomputed, # Path to precomputed k-mer matrix
-        reduce_dimensionality=False             # Disable dimensionality reduction for now
+        k=k,
+        mode=feature_mode,                                      # Essential for resistance gene dosage effects
+        min_kmer_freq=min_kmer_freq,                            # Remove extremely rare k-mers
+        max_features=max_features,                                   # Very wide initial net for diverse mechanisms
+        batch_size=256,                                         # Smaller batches for memory efficiency
+        use_canonical=True,
+        use_sparse=args.use_sparse,                            # Use sparse matrix for k-mer features
+        path_precomputed=args.path_precomputed,                 # Path to precomputed k-mer matrix if available
+        path_kmers=os.path.join(args.path_csv, f"{patho_short}__{args.antibiotic}__k_{k}.pkl"),
     )
-    # # Analyze k-mer repetition
-    # repetition_stats = builder.analyze_kmer_repetition(dataset_list, top_n=20, output_file="None")
     
     # Build feature matrix
     X, y = kmer_features.build_feature_matrix(dataset=dataset_list)
@@ -277,23 +317,23 @@ def main():
     # # print("Training XGBoost model...")
     xgb_model = xgb.XGBClassifier(
         objective="binary:logistic",
-        # use_label_encoder=False,
+        use_label_encoder=False,
         eval_metric="logloss",
         n_jobs=-1,
         # verbosity=1
     )
-    xgb_params = {
-    'alpha': [1e-5, 1e-4], 
-    'colsample_bytree': [0.6],
-    'gamma': [0.05, 0.1], 
-    'learning_rate': [0.01, 0.1], 
-    'max_depth': [2],
-    'subsample': [0.2, 0.4, 0.6]
-    }
+    xgb_params = None
+    # {
+    #     'learning_rate': [0.1],              # Fix at good default
+    #     'max_depth': [3],                 # Most important for genomic data
+    #     'subsample': [0.8],            # Key for preventing overfitting
+    #     'colsample_bytree': [0.6, 0.8],     # Important for k-mer features
+    #     'gamma': [0.1],                  # Simple regularization choice
+    # }
 
-    xgb_scores, xgb_reports, xgb_conf_matrices = fitmodel_nestedcv(
-        X, y, xgb_model, xgb_params, "XGBoost", path_out
-    )
+    save_fname = f"results_xgb__{fname}"
+    path_out = os.path.join(path_out, save_fname)
+    vmes, mes = fitmodel_nestedcv(X, y, xgb_model, xgb_params, "xgb", path_out=path_out)
 
     # # Evaluation
     # print("Evaluating model...")

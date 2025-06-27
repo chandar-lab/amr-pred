@@ -62,6 +62,19 @@ def is_susceptible(row, bp_s):
     return row['MIC_revised'] <= bp_s
 
 
+def clean_ecoli_data(df):
+    """
+    Clean the E. coli data by removing Shigella samples and keeping only E. coli samples.
+    """
+    # lowercase the 'Scientific name' column for case-insensitive comparison
+    df['Scientific name'] = df['Scientific name'].str.lower()
+
+    # filter out Shigella samples
+    df = df[~df['Scientific name'].str.contains('shigella', na=False)]
+
+    return df
+
+
 def main():
     parser = get_parser()
     args = parser.parse_args()
@@ -79,6 +92,22 @@ def main():
 
     # load the data
     df = pd.read_csv(args.path_data, low_memory=False)
+
+    if organism == "escherichia_coli":
+        orig_df_len = len(df)
+        logger.info(f"Length of the original E. coli dataset: {orig_df_len} samples")
+        # we need to only keep E.coli samples and discard the Shigella ones
+        df = clean_ecoli_data(df)
+        # # save the cleaned dataframe
+        # df.to_csv(os.path.join(args.path_out, organism, 'filtered', f"{organism}_cleaned.csv"), index=False)
+        logger.info(f"Cleaned E. coli data: {len(df)} samples")
+        logger.info(f"Number of Shigella samples removed: {orig_df_len - len(df)}")
+        # NOTE: difference between the original and cleaned E. coli dataset should match the number in the AST database
+        # browser when E.coli and Shigella --> scientific name; shows the samples for E.coli and Shigella separately.
+
+        # rename organism group to 'escherichia_coli'
+        df['Organism group'] = 'escherichia_coli'
+
     phenotypic_unique_isolates = df['Isolate'].unique()
     # logger.info(f"Number of isolates in phenotypic data: {len(df['Isolate'].unique())}")
 
@@ -92,7 +121,11 @@ def main():
     # keep the data for the organism
     df_isolates['#Organism group'] = df_isolates['#Organism group'].str.replace(' ', '_', regex=False)
     df_isolates['#Organism group'] = df_isolates['#Organism group'].str.lower()
-    df_isolates = df_isolates[df_isolates['#Organism group'] == organism]
+    if organism == "escherichia_coli":
+        df_isolates = df_isolates[df_isolates['#Organism group'] == 'e.coli_and_shigella']
+        df_isolates['#Organism group'] = 'escherichia_coli'
+    else:
+        df_isolates = df_isolates[df_isolates['#Organism group'] == organism]
 
     # drop the rows where 'Assembly' is NaN
     df_isolates = df_isolates.dropna(subset=['Assembly'])
