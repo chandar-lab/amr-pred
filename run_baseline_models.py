@@ -12,6 +12,7 @@ import xgboost as xgb
 from datetime import datetime
 import time
 import pickle
+import wandb
 
 from sklearn.base import clone
 from sklearn.linear_model import SGDClassifier
@@ -22,6 +23,7 @@ from sklearn.metrics import (
 )
 from features.kmer import KmerFeatures
 from features.utils import plot_umap
+
 
 
 # TODO: 
@@ -108,7 +110,8 @@ def fitmodel_nestedcv(X, pheno, estimator, parameters, modelname, path_out=None)
             y_pred = current_model.predict(X_test)
 
         else:
-            logging.info(f"Performing GridSearchCV for {modelname} in fold {fold_idx+1}")
+            # Use weights and biases for hyperparameter tuning
+            logging.info(f"Performing wandb sweep for {modelname} in fold {fold_idx+1}")
             
             # Perform grid search to find the best hyperparameters
             grid = GridSearchCV(
@@ -164,8 +167,12 @@ def fitmodel_nestedcv(X, pheno, estimator, parameters, modelname, path_out=None)
 
     logging.info(f"{modelname} Nested CV Summary:")
     logging.info(f"\tMean Balanced Accuracy: {np.mean(bal_acc_scores):.3f} ± {np.std(bal_acc_scores):.3f}")
+    wandb.log({"mean_balanced_accuracy": np.mean(bal_acc_scores), "std_balanced_accuracy": np.std(bal_acc_scores)})
     logging.info(f"\tMean F1 Macro: {np.mean(f1_macro_scores):.3f} ± {np.std(f1_macro_scores):.3f}")
+    wandb.log({"mean_f1_macro": np.mean(f1_macro_scores), "std_balanced_accuracy": np.std(f1_macro_scores)})
     logging.info(f"\tMean Very Major Error (VME): {np.mean(very_major_errors)*100:.2f}% ± {np.std(very_major_errors)*100:.2f}%")
+    wandb.log({"mean_very_major_error": np.mean(very_major_errors), "std_very_major_error": np.std(very_major_errors)})
+    wandb.log({"mean_major_error": np.mean(major_errors), "std_major_error": np.std(major_errors)})
     logging.info(f"\tMean Major Error (ME): {np.mean(major_errors)*100:.2f}% ± {np.std(major_errors)*100:.2f}%")
     logging.info(f"\tAvg Fold Time: {np.mean(fold_times):.2f}s")
     logging.info(f"Best Model (Fold {best_fold_idx+1}) - Balanced Accuracy: {best_score:.3f}")
@@ -191,6 +198,9 @@ def fitmodel_nestedcv(X, pheno, estimator, parameters, modelname, path_out=None)
 
 
 def main():
+    wandb.init()
+    config = wandb.config
+    # Anything that is wandb. is gonna get logged to the wandb dashboard.
 
     # Parse command line arguments
     parser = get_parser()
@@ -205,7 +215,7 @@ def main():
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
 
     now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
-    path_out = os.path.join("/home/mila/n/naga-karthik.enamundram/genomicFMs/results", now.split('_')[0], now.split('_')[1])
+    path_out = os.path.join("/home/mila/a/aselstya/scratch/amr/results", now.split('_')[0], now.split('_')[1])
     os.makedirs(path_out, exist_ok=True)
 
     # Parameters
@@ -317,15 +327,21 @@ def main():
     # # print("Training XGBoost model...")
     xgb_model = xgb.XGBClassifier(
         objective="binary:logistic",
-        use_label_encoder=False,
         eval_metric="logloss",
         n_jobs=-1,
+        max_depth=config.tree_depth,  # Set tree depth from config
+        learning_rate=config.learning_rate,  # Set learning rate from config
+        subsample=config.subsample,  # Set subsample from config
+        colsample_bytree=config.colsample_bytree,  # Set column sample by
+        gamma=config.gamma,  # Set gamma from config
         # verbosity=1
     )
+    # Initialize Weights and Biases for hyperparameter tuning
+    
     xgb_params = None
-    # {
+    # xgb_params = {
     #     'learning_rate': [0.1],              # Fix at good default
-    #     'max_depth': [3],                 # Most important for genomic data
+    #     'max_depth': config.tree_depth,                 # Most important for genomic data
     #     'subsample': [0.8],            # Key for preventing overfitting
     #     'colsample_bytree': [0.6, 0.8],     # Important for k-mer features
     #     'gamma': [0.1],                  # Simple regularization choice
