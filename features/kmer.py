@@ -6,12 +6,12 @@ from tqdm import tqdm
 import logging
 import gc
 import pickle
-
+import os
 
 class KmerFeatures:
-    def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False, 
-                 min_kmer_freq=2, use_canonical=True, batch_size=500, max_features=None, use_sparse=False, 
-                 path_kmers=None):
+    def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False,
+                 min_kmer_freq=2, use_canonical=True, batch_size=500, max_features=None, use_sparse=False,
+                 path_kmers=None, path_full_matrix=None):
         """
         Memory-efficient k-mer feature extraction with advanced feature selection.
         
@@ -26,6 +26,7 @@ class KmerFeatures:
         - max_features: int, maximum number of features to keep (most frequent)
         - use_sparse: bool, use sparse CSR matrix (True) or dense numpy arrays (False)
         - path_kmers: str, path to precomputed frequent k-mers dict (pkl file)
+        - path_full_matrix: str, path to a large, precomputed matrix for sub-sampling
         """
         assert mode in ("binary", "count", "entropy", "svd"), "Mode must be one of: 'binary', 'count', 'entropy', 'svd'"
 
@@ -34,7 +35,7 @@ class KmerFeatures:
         self.k = k
         self.mode = mode
         self.kmer_to_col = {}
-        self.path_precomputed = path_precomputed
+        # self.path_precomputed = path_precomputed
         self.reduce_dim = reduce_dimensionality
         self.min_kmer_freq = min_kmer_freq
         self.use_canonical = use_canonical
@@ -42,6 +43,7 @@ class KmerFeatures:
         self.max_features = max_features
         self.use_sparse = use_sparse
         self.path_kmers = path_kmers
+        self.path_full_matrix = path_full_matrix
 
         # For two-pass approach
         self.kmer_global_counts = Counter()
@@ -222,13 +224,45 @@ class KmerFeatures:
             return np.float32
 
     def build_feature_matrix(self, dataset):
-        """Build feature matrix with advanced feature selection."""
+        """
+        Build feature matrix with a priority system:
+        1. Load and sub-sample from a full matrix if available.
+        2. Load from a standard precomputed matrix.
+        3. Build from scratch and save the full matrix if a path is given.
+        """
         
-        if self.path_precomputed:
-            logging.info(f"Loading precomputed k-mer matrix from {self.path_precomputed}...")
-            X, y = self.load_matrix(self.path_precomputed)
-            return X, y
+        # --- NEW: Priority 1 - Load and sub-sample from a full matrix ---
+        if self.path_full_matrix and os.path.exists(self.path_full_matrix):
+            logging.info(f"Loading full feature matrix from {self.path_full_matrix} to sub-sample...")
+            X_full, y = self.load_matrix(self.path_full_matrix)  # This also loads the full kmer_to_col map
 
+            n_features_full = X_full.shape[1]
+            
+            if self.max_features and self.max_features < n_features_full:
+                logging.info(f"Sub-sampling to top {self.max_features} features from {n_features_full} total features.")
+                
+                # Columns are already ordered by k-mer frequency, so we can slice directly
+                X_sub = X_full[:, :self.max_features]
+                
+                # Update the k-mer map to reflect the sub-sampling
+                col_to_kmer_full = {v: k for k, v in self.kmer_to_col.items()}
+                self.kmer_to_col = {col_to_kmer_full[i]: i for i in range(self.max_features)}
+                
+                logging.info(f"Sub-sampled matrix shape: {X_sub.shape}")
+                return X_sub, y
+            else:
+                logging.info("Using the full pre-loaded matrix as max_features is not smaller.")
+                return X_full, y
+
+        # # --- EXISTING: Priority 2 - Load from standard precomputed file ---
+        # if self.path_precomputed:
+        #     logging.info(f"Loading precomputed k-mer matrix from {self.path_precomputed}...")
+        #     X, y = self.load_matrix(self.path_precomputed)
+        #     return X, y
+
+        # --- Fallback: Build matrix from scratch ---
+        logging.info("No precomputed matrix found, building from scratch...")
+        
         # Step 1: Count and filter k-mers
         self._count_global_kmers(dataset)
         
@@ -236,12 +270,17 @@ class KmerFeatures:
             raise ValueError("No k-mers passed the filtering criteria. Consider lowering min_kmer_freq.")
 
         # Step 2: Build feature matrix
-        labels = []
-        
         if self.use_sparse:
-            return self._build_sparse_matrix(dataset)
+            X, y = self._build_sparse_matrix(dataset)
         else:
-            return self._build_dense_matrix(dataset)
+            X, y = self._build_dense_matrix(dataset)
+        
+        # --- NEW: Save the newly built matrix as a 'full' matrix for future runs ---
+        if self.path_full_matrix:
+            logging.info(f"Saving the newly built matrix to {self.path_full_matrix} for future use.")
+            self.save_matrix(X, y, self.path_full_matrix)
+            
+        return X, y
 
     def _build_sparse_matrix(self, dataset):
         """Build sparse CSR matrix."""
@@ -342,26 +381,26 @@ class KmerFeatures:
         if issparse(X):  # Sparse matrix
             logging.info(f"Saving sparse matrix ({X.format}) with shape {X.shape}")
             np.savez_compressed(filepath, 
-                              matrix_type='sparse',
-                              matrix_format=X.format,
-                              data=X.data, 
-                              indices=X.indices, 
-                              indptr=X.indptr, 
-                              shape=X.shape,
-                              dtype=str(X.dtype),
-                              labels=y,
-                              kmer_to_col=self.kmer_to_col,
-                              use_sparse=self.use_sparse)
+                                matrix_type='sparse',
+                                matrix_format=X.format,
+                                data=X.data, 
+                                indices=X.indices, 
+                                indptr=X.indptr, 
+                                shape=X.shape,
+                                dtype=str(X.dtype),
+                                labels=y,
+                                kmer_to_col=self.kmer_to_col,
+                                use_sparse=self.use_sparse)
         else:  # Dense matrix
             logging.info(f"Saving dense matrix with shape {X.shape}")
             np.savez_compressed(filepath, 
-                              matrix_type='dense',
-                              matrix=X, 
-                              labels=y,
-                              kmer_to_col=self.kmer_to_col,
-                              use_sparse=self.use_sparse)
+                                matrix_type='dense',
+                                matrix=X, 
+                                labels=y,
+                                kmer_to_col=self.kmer_to_col,
+                                use_sparse=self.use_sparse)
 
-        logging.info(f"Saved matrix and k-mer mapping to {filepath}")            
+        logging.info(f"Saved matrix and k-mer mapping to {filepath}")           
 
     def load_matrix(self, filepath):
         """Load matrix (sparse or dense), labels, and k-mer mapping from file."""
@@ -400,7 +439,7 @@ class KmerFeatures:
             saved_use_sparse = bool(data['use_sparse'])
             if saved_use_sparse != self.use_sparse:
                 logging.warning(f"Matrix was saved with use_sparse={saved_use_sparse}, "
-                              f"but current setting is use_sparse={self.use_sparse}")
+                                f"but current setting is use_sparse={self.use_sparse}")
         
         logging.info(f"Loaded matrix with shape {X.shape}")
         
