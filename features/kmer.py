@@ -100,7 +100,9 @@ class KmerFeatures:
             self.selected_kmers = set(frequent_kmers.keys())
         
         # Create initial k-mer to column mapping
-        self.kmer_to_col = {kmer: idx for idx, kmer in enumerate(sorted(self.selected_kmers))}
+        # The sort ensures that column 0 is the most frequent k-mer, 1 is the second, and so on.
+        sorted_frequent_kmers = sorted(self.selected_kmers, key=lambda kmer: frequent_kmers.get(kmer, 0), reverse=True)
+        self.kmer_to_col = {kmer: idx for idx, kmer in enumerate(sorted_frequent_kmers)}
         
         logging.info(f"Initial feature set: {len(self.kmer_to_col)} k-mers")
         
@@ -122,8 +124,7 @@ class KmerFeatures:
         logging.info(f"Found {len(self.kmer_global_counts)} unique k-mers")
         
         # Filter by minimum frequency
-        frequent_kmers = {kmer: count for kmer, count in self.kmer_global_counts.items() 
-                         if count > self.min_kmer_freq}
+        frequent_kmers = {kmer: count for kmer, count in self.kmer_global_counts.items() if count >= self.min_kmer_freq}
         
         logging.info(f"After frequency filtering (min_freq={self.min_kmer_freq}): {len(frequent_kmers)} k-mers")
         
