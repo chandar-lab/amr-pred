@@ -219,7 +219,7 @@ def main():
     os.makedirs(path_out, exist_ok=True)
 
     # Parameters
-    min_kmer_freq = 2   # filters out k-mers that appear less than at least this many times in the dataset
+    min_kmer_freq = 2   # filters out extremely rare k-mers that don't appear at least twice
     if args.path_precomputed is not None:
         if not os.path.isfile(args.path_precomputed):
             raise FileNotFoundError(f"Precomputed file not found: {args.path_precomputed}")
@@ -263,7 +263,7 @@ def main():
         batch_size=256,                                         # Smaller batches for memory efficiency
         use_canonical=True,
         use_sparse=args.use_sparse,                            # Use sparse matrix for k-mer features
-        path_precomputed=args.path_precomputed,                 # Path to precomputed k-mer matrix if available
+        path_full_matrix=os.path.join(args.path_csv, f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__feat_10M.npz"),
         path_kmers=os.path.join(args.path_csv, f"{patho_short}__{args.antibiotic}__k_{k}.pkl"),
     )
     
@@ -272,11 +272,11 @@ def main():
     logging.info(f"Feature matrix shape: {X.shape}")
     logging.info(f"Number of samples: {X.shape[0]}")
 
-    # save the matrix to a file
-    if args.path_precomputed is None:
-        save_fname = os.path.join(args.path_csv, f"{fname}.npz")
-        kmer_features.save_matrix(X, y, save_fname)
-        logging.info(f"Feature matrix saved to {save_fname}")
+    # # save the matrix to a file
+    # if args.path_precomputed is None:
+    #     save_fname = os.path.join(args.path_csv, f"{fname}.npz")
+    #     kmer_features.save_matrix(X, y, save_fname)
+    #     logging.info(f"Feature matrix saved to {save_fname}")
 
     if args.debug:
         # plot UMAP of the feature matrix with different metrics
