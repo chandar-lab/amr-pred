@@ -41,4 +41,4 @@ command:
   - "--k"
   - "31"
   - "--path-precomputed"
-  - "./datasets/acinetobacter_baumannii__cefotaxime__k_31__mode_count__feat_1000K.npz"
+  - "./datasets/a_baumannii__cefotaxime__k_31__mode_count__feat_1000K.npz"
