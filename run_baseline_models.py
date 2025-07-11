@@ -38,7 +38,7 @@ LABEL_MAPPING = {
     "resistant": 1,
     "susceptible": 0
 }
-RUNS_PER_FOLD = 2 # Number of runs per fold for hyperparameter tuning, must be fixed
+RUNS_PER_FOLD = 50 # Number of runs per fold for hyperparameter tuning, must be fixed
 NUM_FOLDS = 5  # Number of folds for cross-validation
 
 # Global variable to store the fixed parameters for the sweep and summary runs
