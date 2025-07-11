@@ -19,7 +19,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.base import clone
 from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import StratifiedKFold, GridSearchCV
+from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (
     balanced_accuracy_score, classification_report, confusion_matrix
 )
@@ -49,7 +49,7 @@ class WandbFoldTrainer:
     def __init__(self, model, X_train, y_train, fold_idx):
         # Split incoming train data into training and validation sets
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(
-            X_train, y_train, test_size=0.2, random_state=SEED
+            X_train, y_train, test_size=0.2, random_state=SEED, stratify=y_train
         )
         self.model = model
         self.fold_idx = fold_idx
