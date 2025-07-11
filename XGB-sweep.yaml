@@ -4,7 +4,7 @@ project: amr-prediction
 entity: aselstyne
 method: bayes
 metric: 
-  name: mean_balanced_accuracy
+  name: val_balanced_accuracy
   goal: maximize
 parameters:
   tree_depth:
@@ -25,20 +25,3 @@ parameters:
     distribution: uniform
     min: 0
     max: 10
-  
-command:
-  - ${env}
-  - ${interpreter}
-  - ${program}
-  - "--path-dataroot"
-  - "../amr_genomic_data/acinetobacter_baumannii"
-  - "--path-csv"
-  - "./datasets"
-  - "--pathogen"
-  - "acinetobacter_baumannii"
-  - "--antibiotic"
-  - "cefotaxime"
-  - "--k"
-  - "31"
-  - "--path-precomputed"
-  - "./datasets/a_baumannii__cefotaxime__k_31__mode_count__feat_1000K.npz"
