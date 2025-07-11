@@ -1,0 +1,12 @@
+project: amr-prediction
+parameters:
+  tree_depth:
+    value: 4
+  learning_rate:
+    value: 0.3
+  subsample:
+    value: 1
+  colsample_bytree:
+    value: 1
+  gamma:
+    value: 0

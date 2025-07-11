@@ -1,8 +1,8 @@
 import numpy as np
 from scipy import sparse
 from sklearn.decomposition import TruncatedSVD
-import umap
 import matplotlib.pyplot as plt
+import umap
 
 
 # TODO: change the name of the function
@@ -40,6 +40,15 @@ def efficient_svd(X_sparse, k):
 
     return explained_variance, explained_variance_ratio, X_proj_centered
 
+# import umap
+# def plot_umap(X, y, metric='cosine', title=None, save_path=None):
+#     """
+#     Plots UMAP projection of the data.
+#     """
+#     # NOTE: do not use random_state because it hard-codes n_jobs=1 to be deterministic
+#     reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, metric=metric)
+#     X_umap = reducer.fit_transform(X)
+#     unique_labels = np.unique(y)
 
 def plot_umap(X, y, metric='cosine', title=None, save_path=None):
     """
@@ -58,9 +67,9 @@ def plot_umap(X, y, metric='cosine', title=None, save_path=None):
     plt.yticks([])
     plt.colorbar(boundaries=np.arange(len(unique_labels)+1)-0.5).set_ticks(np.arange(len(unique_labels)))
     
-    if title:
-        plt.title(title)
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    
-    plt.show()
+#     if title:
+#         plt.title(title)
+#     if save_path:
+#         plt.savefig(save_path, dpi=300, bbox_inches='tight')
+#     #test
+#     plt.show()
