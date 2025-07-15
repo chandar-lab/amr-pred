@@ -57,19 +57,19 @@ class WandbFoldTrainer:
                 self.best_id = run.id # This is so metrics can be accessed later
 
 
-def init_summary_wandb(args, config):
+def init_summary_wandb(cfg, config):
     ''' Create the overarching summary run to collect results from the sweeps across folds.
     This run will be used to track the fixed parameters for the sweep and the summary results.'''
 
-    patho_short = f"{args.pathogen.split('_')[0][0]}_{args.pathogen.split('_')[1]}"
+    patho_short = f"{cfg.dataset.pathogen.split('_')[0][0]}_{cfg.dataset.pathogen.split('_')[1]}"
     
     # Get an ID to uniquely identify runs with identical setups
     # Use the weights and biases api to find runs in the same project which contain the same pathogen and antibiotic
     api = wandb.Api()
     entity = api.default_entity  # Automatically set entity from wandb params, must run 'wandb login' first.
     runs = api.runs(f"{entity}/amr-prediction", {"$and": [
-        {"config.pathogen": args.pathogen},
-        {"config.antibiotic": args.antibiotic}
+        {"config.pathogen": cfg.dataset.pathogen},
+        {"config.antibiotic": cfg.dataset.antibiotic}
     ]})
     # Find the highest ID among the runs
     id = 0
@@ -78,13 +78,13 @@ def init_summary_wandb(args, config):
 
     # Append the general config to the sweep_config
     wandb_config = {
-        "pathogen": args.pathogen,
+        "pathogen": cfg.dataset.pathogen,
+        "antibiotic": cfg.dataset.antibiotic,
         "pathogen_short": patho_short,
-        "antibiotic": args.antibiotic,
-        "k": args.k,
-        "feat_mode": args.feat_mode,
-        "max_features": f"{args.max_features//1000}K",
-        "use_sparse": args.use_sparse,
+        "k": cfg.k,
+        "feat_mode": cfg.feat_mode,
+        "max_features": f"{cfg.max_features//1000}K",
+        "use_sparse": cfg.dataset.use_sparse,
         "id": id,
     }
 
@@ -116,7 +116,7 @@ def init_summary_wandb(args, config):
     # else:
     summary_run = wandb.init(
         project="amr-prediction",
-        name=f"summary__{patho_short}__{args.antibiotic}__id_{id}__k_{args.k}__mode_{args.feat_mode}__feat_{args.max_features//1000}K",
+        name=f"summary__{patho_short}__{cfg.dataset.antibiotic}__id_{id}__k_{cfg.k}__mode_{cfg.feat_mode}__feat_{cfg.max_features//1000}K",
         config=wandb_config,
         tags=["summary", "baseline"]
     )
