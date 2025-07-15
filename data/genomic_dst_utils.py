@@ -272,6 +272,6 @@ if __name__ == "__main__":
     dashing_dist = dashing_distance_pair(baumannii1, baumannii2)
     print(f"{dashing_dist:.4f} (calculated in {time.time() - start_time:.2f} seconds)")
 
-    print("\nCalculating pairwise ANI distances for all assemblies in the text file:")
-    ani_distance_matrix = ani_distance_txt(all_assemblies_txt)
-    print(ani_distance_matrix)
+    print("\nCalculating pairwise dashing distances for all assemblies in the text file:")
+    dashing_distance_matrix = dashing_distance_txt(all_assemblies_txt)
+    print(dashing_distance_matrix)

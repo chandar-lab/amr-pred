@@ -1,6 +1,9 @@
 """
 Script containing utility functions for data preprocessing and visualization
 """
+import os
+import glob
+import logging
 
 import pandas as pd
 import seaborn as sns
@@ -9,6 +12,13 @@ import matplotlib.pyplot as plt
 # global parameters
 FONTSIZE = 12
 MIN_SAMPLES_PER_CLASS = 50  # arbitrary number; used because this is what bMx does internally
+
+# Borrowed from run_baseline_models.py
+LABEL_MAPPING = {
+    # NOTE: convention is to use 0 for susceptible and 1 for resistant
+    "resistant": 1,
+    "susceptible": 0
+}
 
 
 def plot_antibiotic_counts(antibiotic_dict, organism, save_path):
@@ -136,3 +146,37 @@ def get_drugs_for_organism_clsi(df, organism):
     drugs = df_filtered['drug'].unique().tolist()
     
     return drugs
+
+def load_data(path_data_csv, path_root_fna):
+    ''' Args:
+    path_data_csv: path to the CSV file containing the dataset for a specific specie-drug combination
+    path_root_fna: root path of the dataset genomic sequences for all species
+    Returns:
+    dataset_list: list of dictionaries (one for each assembly relevant to that specie-drug combo), 
+        each containing the sequence file path, label, and assembly
+    
+    Used to run baseline models and for phylogeny-based splits.'''
+
+    df_data = pd.read_csv(path_data_csv)
+    specie_drug_assemblies = df_data['Assembly'].tolist()
+    # get the corresponding phenotypic labels for each assembly
+    phenotypes = df_data['Phenotype_revised'].tolist()
+    # print(phenotypes)
+
+    dataset_list = []
+    for assembly, phenotype in zip(specie_drug_assemblies, phenotypes):
+        temp_dict = {}
+        # if assembly not in dataset_dict:
+        fname = glob.glob(os.path.join(path_root_fna, assembly, "ncbi_dataset", "data", assembly, "*.fna"))
+        if len(fname) == 0:
+            logging.info(f"WARNING: No .fna file found for assembly {assembly}. Skipping this entry.")
+            continue
+
+        temp_dict["seq"] = fname[0] 
+        temp_dict["label"] = LABEL_MAPPING[phenotype]
+        temp_dict["assembly"] = assembly # ADDED FOR PHYLOGENY-BASED SPLITS
+        dataset_list.append(temp_dict)
+    
+    print("Number of samples in the dataset: ", len(dataset_list))
+    
+    return dataset_list

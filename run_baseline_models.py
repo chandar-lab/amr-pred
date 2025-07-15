@@ -25,6 +25,7 @@ from sklearn.metrics import (
 )
 from features.kmer import KmerFeatures
 from features.utils import plot_umap
+from data.data_utils import load_data
 
 
 
@@ -33,11 +34,7 @@ from features.utils import plot_umap
 # 2. add options for other ML models; use Hydra for setting up models
 
 SEED = 42
-LABEL_MAPPING = {
-    # NOTE: convention is to use 0 for susceptible and 1 for resistant
-    "resistant": 1,
-    "susceptible": 0
-}
+
 RUNS_PER_FOLD = 50 # Number of runs per fold for hyperparameter tuning, must be fixed
 NUM_FOLDS = 5  # Number of folds for cross-validation
 
@@ -185,31 +182,7 @@ def init_summary_wandb(args):
 
 
 
-def load_data(path_data_csv, path_root_fna):
 
-    df_data = pd.read_csv(path_data_csv)
-    specie_drug_assemblies = df_data['Assembly'].tolist()
-    # get the corresponding phenotypic labels for each assembly
-    phenotypes = df_data['Phenotype_revised'].tolist()
-    # print(phenotypes)
-
-    dataset_list = []
-    for assembly, phenotype in zip(specie_drug_assemblies, phenotypes):
-        temp_dict = {}
-        # if assembly not in dataset_dict:
-        fname = glob.glob(os.path.join(path_root_fna, assembly, "ncbi_dataset", "data", assembly, "*.fna"))
-        if len(fname) == 0:
-            logging.info(f"WARNING: No .fna file found for assembly {assembly}. Skipping this entry.")
-            continue
-
-        temp_dict["seq"] = fname[0] 
-        temp_dict["label"] = LABEL_MAPPING[phenotype]
-        temp_dict["assembly"] = assembly # ADDED FOR PHYLOGENY-BASED SPLITS
-        dataset_list.append(temp_dict)
-    
-    print("Number of samples in the dataset: ", len(dataset_list))
-    
-    return dataset_list
 
 
 def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=None, prescribed_fold=None):
