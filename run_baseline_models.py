@@ -4,14 +4,12 @@ import argparse
 import time
 import logging
 import xgboost as xgb
-from datetime import datetime
 import time
 import pickle
 import wandb
 import hydra
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import DictConfig
 
-from sklearn.model_selection import train_test_split
 from sklearn.base import clone
 from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -30,29 +28,10 @@ SEED = 42
 RUNS_PER_FOLD = 50 # Number of runs per fold for hyperparameter tuning, must be fixed
 NUM_FOLDS = 5  # Number of folds for cross-validation
 
+logger = logging.getLogger(__name__)
+
 # Global variable to store the fixed parameters for the sweep and summary runs
 fixed_config = {}
-
-
-
-def get_parser():
-    
-    parser = argparse.ArgumentParser(description="Train XGBoost model on k-mer features")
-    parser.add_argument("--path-dataroot", type=str, help="Root path of the dataset genomic sequences for all species")
-    parser.add_argument("--path-csv", type=str, help="Path to the folder containing CSV files for each specie-drug combination")
-    parser.add_argument("--pathogen", type=str, help="Pathogen name (lowercase, separated by underscores) e.g. neisseria_gonorrhoeae")
-    parser.add_argument("--antibiotic", type=str, help="Antibiotic name (lowercase) e.g. azithromycin")
-    parser.add_argument("--path-precomputed", type=str, default=None, help="Path to precomputed k-mer matrix (optional)")
-    parser.add_argument("--debug",  action='store_true', help="Enable debug mode for verbose logging")
-    parser.add_argument("--k", type=int, default=8, help="Length of k-mers to extract (default: 8)")
-    parser.add_argument("--feat-mode", type=str, default="count", choices=["binary", "count", "entropy"], help="Mode for k-mer extraction (default: count)")
-    parser.add_argument("--max-features", type=int, default=1000000, help="Maximum number of top most frequent k-mers to extract (default: 1M)")
-    parser.add_argument("--use-sparse", action='store_true', help="Use sparse matrix for k-mer features (default: False)")
-    # Args for WANDB array jobs, these are unused for the time being
-    # parser.add_argument("--fold-idx", type=int, default=None, help="Fold index for cross-validation. This will run only the specified fold, for parallel execution. Default is None, which runs all folds.")
-    # parser.add_argument("--summary_wandb_id", type=str, default=None, help="ID of the summary wandb run to log results to. If not provided, a new summary run will be created. If specifying fold_idx, this value is required.")
-
-    return parser
 
 
 def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=None, prescribed_fold=None):
@@ -69,7 +48,7 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
     summary_run.summary["best_y_test"] = None
     summary_run.update()
 
-    logging.info(f"Starting CV for {modelname}...")
+    logger.info(f"Starting CV for {modelname}...")
 
     for fold_idx, (train_idx, test_idx) in enumerate(outer_cv.split(X, pheno)):
         if prescribed_fold is not None and fold_idx != prescribed_fold:
@@ -81,7 +60,7 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
 
         if wandb_config is None:
             # If no parameters are provided, use the estimator as is
-            logging.info(f"Using default parameters for {modelname} in fold {fold_idx+1}")
+            logger.info(f"Using default parameters for {modelname} in fold {fold_idx+1}")
             
             current_model = clone(estimator)
             # Create a wandb run for this fold
@@ -103,7 +82,7 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
             fold_wandb_run = api.run(f"amr-prediction/{fold_wandb_run.id}")
         else:
             # Use weights and biases for hyperparameter tuning
-            logging.info(f"Performing grid search for {modelname} in fold {fold_idx+1} using weights and biases")
+            logger.info(f"Performing grid search for {modelname} in fold {fold_idx+1} using weights and biases")
             wandb_config['name'] = f"{fixed_config['pathogen']}-{fixed_config['antibiotic']}__id_{fixed_config['id']}__fold_{fold_idx+1}__k{fixed_config['k']}__mode_{fixed_config['feat_mode']}__feat_{(fixed_config['max_features']//1000)}K"
             sweep_id = wandb.sweep(wandb_config, project="amr-prediction")
 
@@ -112,8 +91,8 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
             wandb.agent(sweep_id, function=trainer, count=RUNS_PER_FOLD)
 
             # Output notification of best model found
-            logging.info(f"Best parameters in fold {fold_idx+1}: {trainer.best_params}")
-            logging.info(f"Training on full training set with best parameters...")
+            logger.info(f"Best parameters in fold {fold_idx+1}: {trainer.best_params}")
+            logger.info(f"Training on full training set with best parameters...")
 
             # Use the best setting to predict on the test set
             current_model = trainer.best_model
@@ -162,8 +141,8 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
             summary_run.summary["best_fold_idx"] = fold_idx+1
             summary_run.update()
 
-        logging.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f}")
-        logging.info(f"Very Major Error (VME): {(vme)*100:.2f}% | Major Error (ME): {(me)*100:.2f}%")
+        logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f}")
+        logger.info(f"Very Major Error (VME): {(vme)*100:.2f}% | Major Error (ME): {(me)*100:.2f}%")
 
 
     ### SUMMARY RESULTS ACROSS FOLDS ###
@@ -188,14 +167,14 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
     # Convert classification report to dictionary for easy access/plotting
     best_report_dict = classification_report(summary_run.summary["best_y_test"], summary_run.summary["best_y_pred"], digits=4, output_dict=True)
 
-    logging.info(f"{modelname} CV Summary (also available on wandb for id {summary_run.id}):")
-    logging.info(f"\tMean Balanced Accuracy: {np.mean(bal_acc_scores):.3f} ± {np.std(bal_acc_scores):.3f}")
-    logging.info(f"\tMean F1 Macro: {np.mean(f1_macro_scores):.3f} ± {np.std(f1_macro_scores):.3f}")
-    logging.info(f"\tMean Very Major Error (VME): {np.mean(very_major_errors)*100:.2f}% ± {np.std(very_major_errors)*100:.2f}%")
-    logging.info(f"\tMean Major Error (ME): {np.mean(major_errors)*100:.2f}% ± {np.std(major_errors)*100:.2f}%")
-    logging.info(f"\tAvg Fold Time: {np.mean(fold_times):.2f}s")
-    logging.info(f"Best Model (Fold {summary_run.summary['best_fold_idx']}) - Balanced Accuracy: {summary_run.summary['best_score']:.3f}")
-    logging.info(f"Best Model Classification Report:\n{best_report}")
+    logger.info(f"{modelname} CV Summary (also available on wandb for id {summary_run.id}):")
+    logger.info(f"\tMean Balanced Accuracy: {np.mean(bal_acc_scores):.3f} ± {np.std(bal_acc_scores):.3f}")
+    logger.info(f"\tMean F1 Macro: {np.mean(f1_macro_scores):.3f} ± {np.std(f1_macro_scores):.3f}")
+    logger.info(f"\tMean Very Major Error (VME): {np.mean(very_major_errors)*100:.2f}% ± {np.std(very_major_errors)*100:.2f}%")
+    logger.info(f"\tMean Major Error (ME): {np.mean(major_errors)*100:.2f}% ± {np.std(major_errors)*100:.2f}%")
+    logger.info(f"\tAvg Fold Time: {np.mean(fold_times):.2f}s")
+    logger.info(f"Best Model (Fold {summary_run.summary['best_fold_idx']}) - Balanced Accuracy: {summary_run.summary['best_score']:.3f}")
+    logger.info(f"Best Model Classification Report:\n{best_report}")
 
     wandb_tracked_values = {
         "mean_major_error": f"{np.mean(major_errors):.3f}", 
@@ -234,60 +213,41 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
     return very_major_errors, major_errors
 
 
-def main():
-    # Parse command line arguments
-    parser = get_parser()
-    args = parser.parse_args()
-    path_root_fna = args.path_dataroot
-    path_data_csv = args.path_csv
+# config_path is a directory relative to this file (run_baseline_models.py)
+@hydra.main(config_path="config", config_name="main", version_base=None)
+def main(cfg: DictConfig):
+    hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
+    output_dir = hydra_cfg.runtime.output_dir
 
-    # dataset = "neisseria_gonorrhoeae__azithromycin.csv"
-    dataset = f"{args.pathogen}__{args.antibiotic}_SR_filt.csv"
-    path_data_csv = os.path.join(args.path_csv, dataset)
+    path_root_fna = cfg.dataset.path_dataroot
+    path_data_csv = cfg.dataset.path_csv
+    pathogen = cfg.dataset.pathogen
+    antibiotic = cfg.dataset.antibiotic
+
+    dataset = f"{pathogen}__{antibiotic}_SR_filt.csv"
+    path_data_csv = os.path.join(cfg.dataset.path_csv, dataset)
     if not os.path.isfile(path_data_csv):
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
 
-    now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
-    path_out = os.path.join("/home/mila/n/naga-karthik.enamundram/genomicFMs/results", now.split('_')[0], now.split('_')[1])
-    os.makedirs(path_out, exist_ok=True)
-
     # Parameters
     min_kmer_freq = 2   # filters out extremely rare k-mers that don't appear at least twice
-    if args.path_precomputed is not None:
-        if not os.path.isfile(args.path_precomputed):
-            raise FileNotFoundError(f"Precomputed file not found: {args.path_precomputed}")
-        
-        # Extract k, feature mode, and max features from the filename
-        k = int(args.path_precomputed.split('__')[2].split('_')[1])
-        feature_mode = args.path_precomputed.split('__')[3].split('_')[1]
-        max_features = int(args.path_precomputed.split('__')[4].split('_')[1].split('.')[0][:-1]) * 1000
-    else:        
-        k = args.k
-        feature_mode = args.feat_mode
-        max_features = args.max_features
+    k = cfg.k
+    feature_mode = cfg.feat_mode
+    max_features = cfg.max_features
 
-    patho_short = f"{args.pathogen.split('_')[0][0]}_{args.pathogen.split('_')[1]}"
-    fname = f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__feat_{(max_features//1000)}K"
-    file_handler = logging.FileHandler(os.path.join(path_out, f"log__{fname}.txt"))
-    console_handler = logging.StreamHandler()
+    patho_short = f"{pathogen.split('_')[0][0]}_{pathogen.split('_')[1]}"
+    fname = f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_{(max_features//1000)}K"
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[file_handler, console_handler]
-    )
-    if args.path_precomputed is not None:
-        logging.info(f"Using precomputed k-mer matrix from {args.path_precomputed}")
-
-    logging.info(f"Training on {args.pathogen} for {args.antibiotic} using k-mers of length {args.k} ...")
+    logger.info(f"Training on {pathogen} for {antibiotic} using k-mers of length {k} ...")
 
     # NOTE: this is a list of dicts pointing for the paths to the genomic sequences (.fna files) and the corresponding S/R labels
-    if args.debug:
+    if cfg.debug:
         dataset_list = load_data(path_data_csv, path_root_fna)[:75]  # Load only first 75 samples for debugging
     else:
         dataset_list = load_data(path_data_csv, path_root_fna)
+        logger.info(f"Number of samples in the dataset: {len(dataset_list)}")
 
-    logging.info("Initializing K-mer class to build feature matrix ...")
+    logger.info("Initializing K-mer class to build feature matrix ...")
     kmer_features = KmerFeatures(
         k=k,
         mode=feature_mode,                                      # Essential for resistance gene dosage effects
@@ -295,27 +255,27 @@ def main():
         max_features=max_features,                                   # Very wide initial net for diverse mechanisms
         batch_size=256,                                         # Smaller batches for memory efficiency
         use_canonical=True,
-        use_sparse=args.use_sparse,                            # Use sparse matrix for k-mer features
-        path_full_matrix=os.path.join(args.path_csv, f"{patho_short}__{args.antibiotic}__k_{k}__mode_{feature_mode}__feat_10M.npz"),
-        path_kmers=os.path.join(args.path_csv, f"{patho_short}__{args.antibiotic}__k_{k}.pkl"),
+        use_sparse=cfg.dataset.use_sparse,                            # Use sparse matrix for k-mer features
+        path_full_matrix=os.path.join(cfg.dataset.path_csv, f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_10M.npz"),
+        path_kmers=os.path.join(cfg.dataset.path_csv, f"{patho_short}__{antibiotic}__k_{k}.pkl"),
     )
     
     # Build feature matrix
     X, y = kmer_features.build_feature_matrix(dataset=dataset_list)
-    logging.info(f"Feature matrix shape: {X.shape}")
-    logging.info(f"Number of samples: {X.shape[0]}")
+    logger.info(f"Feature matrix shape: {X.shape}")
+    logger.info(f"Number of samples: {X.shape[0]}")
 
-    if args.debug:
+    if cfg.debug:
         # plot UMAP of the feature matrix with different metrics
         # metrics = ["jaccard", "rogerstanimoto", "euclidean", "canberra", "cosine"]
         metrics = ["jaccard", "cosine"]
         for metric in metrics:
-            logging.info(f"Plotting UMAP with metric: {metric}")
+            logger.info(f"Plotting UMAP with metric: {metric}")
             start_time = time.time()
             plot_umap(X, y, metric=metric,
                     title=f"UMAP of feature matrix; K: {k}; Mode: {feature_mode}; Metric: {metric}", 
-                    save_path=os.path.join(path_out, f"umap__{fname}__{metric}.png"))
-            logging.info(f"UMAP plot for {metric} completed in {time.time() - start_time:.2f} seconds")
+                    save_path=os.path.join(output_dir, f"umap__{fname}__{metric}.png"))
+            logger.info(f"UMAP plot for {metric} completed in {time.time() - start_time:.2f} seconds")
 
 
     # # ==========
@@ -356,7 +316,7 @@ def main():
     #     sweep_config = yaml.safe_load(config_file)
     
     # Initialize the summary run to collect results from the sweeps across folds
-    init_summary_wandb(args, config=fixed_config)
+    init_summary_wandb(cfg, config=fixed_config)
 
     # Train XGBoost
     # # print("Training XGBoost model...")
@@ -368,8 +328,8 @@ def main():
     )
 
     save_fname = f"results_xgb__{fname}"
-    path_out = os.path.join(path_out, save_fname)
-    vmes, mes = fitmodel_nestedcv(X, y, xgb_model, wandb_config=None, modelname="xgb", path_out=path_out)#, prescribed_fold=args.fold_idx)
+    output_dir = os.path.join(output_dir, save_fname)
+    vmes, mes = fitmodel_nestedcv(X, y, xgb_model, wandb_config=None, modelname="xgb", path_out=output_dir)#, prescribed_fold=args.fold_idx)
 
 
 
