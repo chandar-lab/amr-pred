@@ -1,0 +1,8 @@
+# Full kwargs
+# https://xgboost.readthedocs.io/en/stable/parameter.html#xgboost-parameters
+validate_parameters: True
+verbosity: 1
+booster: gbtree
+objective: 'binary:logistic'
+eval_metric: 'logloss'
+seed: ${seed}
