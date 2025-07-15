@@ -40,8 +40,6 @@ def load_data(path_data_csv, path_root_fna):
         temp_dict["assembly"] = assembly # ADDED FOR PHYLOGENY-BASED SPLITS
         dataset_list.append(temp_dict)
     
-    print("Number of samples in the dataset: ", len(dataset_list))
-    
     return dataset_list
 
 
