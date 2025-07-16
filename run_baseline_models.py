@@ -1,13 +1,11 @@
 import os
 import numpy as np
-import argparse
 import time
 import logging
-import xgboost as xgb
 import time
-import pickle
 import wandb
 import hydra
+import pandas as pd
 from omegaconf import DictConfig
 
 from sklearn.base import clone
@@ -24,7 +22,6 @@ from training.train_utils import compute_major_errors
 from training.wandb_utils import WandbFoldTrainer, init_summary_wandb
 
 
-SEED = 42
 RUNS_PER_FOLD = 50 # Number of runs per fold for hyperparameter tuning, must be fixed
 NUM_FOLDS = 5  # Number of folds for cross-validation
 
@@ -33,13 +30,13 @@ logger = logging.getLogger(__name__)
 # Global variable to store the fixed parameters for the sweep and summary runs
 fixed_config = {}
 
-
-def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=None, prescribed_fold=None):
+def fitmodel_nestedcv(X, pheno, estimator, config, use_sweeps=False, prescribed_fold=None):
     api = wandb.Api()
     # Open the summary run to log results
     summary_run = api.run(f"amr-prediction/{fixed_config['summary_wandb_id']}")
 
-    outer_cv = StratifiedKFold(n_splits=NUM_FOLDS, shuffle=True, random_state=SEED)
+    modelname = config.model.name
+    outer_cv = StratifiedKFold(n_splits=NUM_FOLDS, shuffle=True, random_state=config.seed)
 
     # Set the best score and fold idx in the wandb summary run
     summary_run.summary["best_score"] = -1
@@ -58,7 +55,7 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = pheno[train_idx], pheno[test_idx]
 
-        if wandb_config is None:
+        if not use_sweeps:
             # If no parameters are provided, use the estimator as is
             logger.info(f"Using default parameters for {modelname} in fold {fold_idx+1}")
             
@@ -176,17 +173,30 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
     logger.info(f"Best Model (Fold {summary_run.summary['best_fold_idx']}) - Balanced Accuracy: {summary_run.summary['best_score']:.3f}")
     logger.info(f"Best Model Classification Report:\n{best_report}")
 
+    # compute mean and std of metrics (this is across all folds)
+    mean_me, std_me = np.mean(major_errors), np.std(major_errors)
+    mean_vme, std_vme = np.mean(very_major_errors), np.std(very_major_errors)
+    mean_bal_acc, std_bal_acc = np.mean(bal_acc_scores), np.std(bal_acc_scores)
+    mean_f1_macro, std_f1_macro = np.mean(f1_macro_scores), np.std(f1_macro_scores)
+
     wandb_tracked_values = {
-        "mean_major_error": f"{np.mean(major_errors):.3f}", 
-        "std_major_error": f"{np.std(major_errors):.3f}", 
-        "mean_very_major_error": f"{np.mean(very_major_errors):.3f}", 
-        "std_very_major_error": f"{np.std(very_major_errors):.3f}", 
-        "mean_balanced_accuracy": f"{np.mean(bal_acc_scores):.3f}", 
-        "std_balanced_accuracy": f"{np.std(bal_acc_scores):.3f}", 
-        "mean_f1_macro": f"{np.mean(f1_macro_scores):.3f}", 
-        "std_f1_macro": f"{np.std(f1_macro_scores):.3f}",
-        "fda_me_passed": True if (np.mean(major_errors) < 0.03) else False,
-        "fda_vme_passed": True if (np.mean(very_major_errors) < 0.015) else False
+        'model_name': modelname,
+        'pathogen': f"{config.dataset.pathogen.split('_')[0][0]}_{config.dataset.pathogen.split('_')[1]}",
+        'antibiotic': config.dataset.antibiotic,
+        'k': config.matrix.k,
+        'feature_mode': config.matrix.feat_mode,
+        'max_features': config.matrix.max_features,
+        "mean_fold_time": np.mean(fold_times),
+        "mean_major_error": mean_me, 
+        "std_major_error": std_me,
+        "mean_very_major_error": mean_vme,
+        "std_very_major_error": std_vme,
+        "mean_balanced_accuracy": mean_bal_acc,
+        "std_balanced_accuracy": std_bal_acc,
+        "mean_f1_macro": mean_f1_macro,
+        "std_f1_macro": std_f1_macro,
+        "fda_me_passed": True if (mean_me < 0.03) else False,
+        "fda_vme_passed": True if (mean_vme < 0.015) else False
     }
 
     # Log each summary metric to the summary run
@@ -195,22 +205,7 @@ def fitmodel_nestedcv(X, pheno, estimator, wandb_config, modelname, path_out=Non
     
     summary_run.update()
 
-    # Save results if path provided
-    if path_out:
-        results = {
-            'model_name': modelname,
-            'best_fold_idx': summary_run.summary['best_fold_idx'],
-            'best_score': summary_run.summary['best_score'],
-            'best_classification_report': best_report_dict,
-            'balanced_accuracy_scores': bal_acc_scores,
-            'f1_macro_scores': f1_macro_scores,
-        }
-        
-        # Save as pickle for easy loading
-        with open(f"{path_out}.pkl", 'wb') as f:
-            pickle.dump(results, f)    
-
-    return very_major_errors, major_errors
+    return wandb_tracked_values, best_report_dict
 
 
 # config_path is a directory relative to this file (run_baseline_models.py)
@@ -231,9 +226,9 @@ def main(cfg: DictConfig):
 
     # Parameters
     min_kmer_freq = 2   # filters out extremely rare k-mers that don't appear at least twice
-    k = cfg.k
-    feature_mode = cfg.feat_mode
-    max_features = cfg.max_features
+    k = cfg.matrix.k
+    feature_mode = cfg.matrix.feat_mode
+    max_features = cfg.matrix.max_features
 
     patho_short = f"{pathogen.split('_')[0][0]}_{pathogen.split('_')[1]}"
     fname = f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_{(max_features//1000)}K"
@@ -256,7 +251,7 @@ def main(cfg: DictConfig):
         batch_size=256,                                         # Smaller batches for memory efficiency
         use_canonical=True,
         use_sparse=cfg.dataset.use_sparse,                            # Use sparse matrix for k-mer features
-        path_full_matrix=os.path.join(cfg.dataset.path_csv, f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_10M.npz"),
+        path_full_matrix=os.path.join(cfg.dataset.path_csv, f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_5M.npz"),
         path_kmers=os.path.join(cfg.dataset.path_csv, f"{patho_short}__{antibiotic}__k_{k}.pkl"),
     )
     
@@ -278,38 +273,6 @@ def main(cfg: DictConfig):
             logger.info(f"UMAP plot for {metric} completed in {time.time() - start_time:.2f} seconds")
 
 
-    # # ==========
-    # # logistic regression
-    # # ==========
-    # elastic_net = SGDClassifier(
-    #     loss="log",
-    #     penalty="elasticnet",
-    #     random_state=SEED,
-    # )
-    # elastic_net_params = {
-    #     "alpha": [0.001, 0.01],
-    #     "l1_ratio": [0.1, 0.5, 0.9],
-    # }
-
-    # enet_scores, enet_reports, enet_conf_matrices = fitmodel_nestedcv(
-    #     X, y, elastic_net, elastic_net_params, "ElasticNet"
-    # )
-
-    # # ==========
-    # # Random Forest
-    # # ==========
-    # rf = RandomForestClassifier(
-    #     n_jobs=-1,
-    #     random_state=SEED,
-    #     class_weight="balanced",
-    # )
-    # rf_params = {
-    #     "n_estimators": [100, 200],
-    # }
-    # rf_scores, rf_reports, rf_conf_matrices = fitmodel_nestedcv(
-    #     X, y, rf, rf_params, "RandomForest"
-    # )
-
     # # Initialize wandb
     # # Open the sweep config from the yaml, defining sweep hyperparams and ranges
     # with open("./amr-pred/XGB-sweep.yaml", 'r') as config_file:
@@ -319,19 +282,16 @@ def main(cfg: DictConfig):
     init_summary_wandb(cfg, config=fixed_config)
 
     # Train XGBoost
-    # # print("Training XGBoost model...")
-    xgb_model = xgb.XGBClassifier(
-        objective="binary:logistic",
-        eval_metric="logloss",
-        n_jobs=-1,
-        # verbosity=1
-    )
+    model = hydra.utils.instantiate(cfg.model)
+    logger.info(f"Training {model.__class__.__name__} model...")
+    results_dict, best_classification_report = fitmodel_nestedcv(X, y, model, config=cfg, use_sweeps=False)#, prescribed_fold=args.fold_idx)
 
-    save_fname = f"results_xgb__{fname}"
-    output_dir = os.path.join(output_dir, save_fname)
-    vmes, mes = fitmodel_nestedcv(X, y, xgb_model, wandb_config=None, modelname="xgb", path_out=output_dir)#, prescribed_fold=args.fold_idx)
-
-
+    # Save the results to a CSV file
+    save_fname = f"results_{cfg.model.name}__{fname}"
+    path_out = os.path.join(output_dir, save_fname)
+    logger.info(f"Results saved to {path_out} ...")
+    results_df = pd.DataFrame([results_dict])
+    results_df.to_csv(f"{path_out}.csv", index=False)
 
 if __name__ == "__main__":
     main()
