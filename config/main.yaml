@@ -12,9 +12,10 @@ debug: False
 path_out: None
 
 # feature matrix parameters
-k: 31
-feat_mode: "count"
-max_features: 1_000_000
+matrix:
+  k: 31
+  feat_mode: "count"
+  max_features: 100_000
 
 
 hydra:
