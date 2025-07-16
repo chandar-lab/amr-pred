@@ -81,9 +81,9 @@ def init_summary_wandb(cfg, config):
         "pathogen": cfg.dataset.pathogen,
         "antibiotic": cfg.dataset.antibiotic,
         "pathogen_short": patho_short,
-        "k": cfg.k,
-        "feat_mode": cfg.feat_mode,
-        "max_features": f"{cfg.max_features//1000}K",
+        "k": cfg.matrix.k,
+        "feat_mode": cfg.matrix.feat_mode,
+        "max_features": f"{cfg.matrix.max_features//1000}K",
         "use_sparse": cfg.dataset.use_sparse,
         "id": id,
     }
@@ -116,7 +116,7 @@ def init_summary_wandb(cfg, config):
     # else:
     summary_run = wandb.init(
         project="amr-prediction",
-        name=f"summary__{patho_short}__{cfg.dataset.antibiotic}__id_{id}__k_{cfg.k}__mode_{cfg.feat_mode}__feat_{cfg.max_features//1000}K",
+        name=f"summary__{patho_short}__{cfg.dataset.antibiotic}__id_{id}__k_{cfg.matrix.k}__mode_{cfg.matrix.feat_mode}__feat_{cfg.matrix.max_features//1000}K",
         config=wandb_config,
         tags=["summary", "baseline"]
     )
