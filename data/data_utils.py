@@ -5,6 +5,9 @@ import os
 import glob
 import logging
 
+import os
+import glob
+import logging
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -12,6 +15,35 @@ import matplotlib.pyplot as plt
 # global parameters
 FONTSIZE = 12
 MIN_SAMPLES_PER_CLASS = 50  # arbitrary number; used because this is what bMx does internally
+LABEL_MAPPING = {
+    # NOTE: convention is to use 0 for susceptible and 1 for resistant
+    "resistant": 1,
+    "susceptible": 0
+}
+
+def load_data(path_data_csv, path_root_fna):
+
+    df_data = pd.read_csv(path_data_csv)
+    specie_drug_assemblies = df_data['Assembly'].tolist()
+    # get the corresponding phenotypic labels for each assembly
+    phenotypes = df_data['Phenotype_revised'].tolist()
+    # print(phenotypes)
+
+    dataset_list = []
+    for assembly, phenotype in zip(specie_drug_assemblies, phenotypes):
+        temp_dict = {}
+        # if assembly not in dataset_dict:
+        fname = glob.glob(os.path.join(path_root_fna, assembly, "ncbi_dataset", "data", assembly, "*.fna"))
+        if len(fname) == 0:
+            logging.info(f"WARNING: No .fna file found for assembly {assembly}. Skipping this entry.")
+            continue
+
+        temp_dict["seq"] = fname[0] 
+        temp_dict["label"] = LABEL_MAPPING[phenotype]
+        temp_dict["assembly"] = assembly # ADDED FOR PHYLOGENY-BASED SPLITS
+        dataset_list.append(temp_dict)
+    
+    return dataset_list
 
 # Borrowed from run_baseline_models.py
 LABEL_MAPPING = {

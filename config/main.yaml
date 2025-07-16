@@ -1,0 +1,42 @@
+defaults:
+  - dataset: easy/a_baumannii__ciprofloxacin
+  - model: xgboost
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
+  - _self_
+
+seed: 42
+debug: False
+
+# output directory
+path_out: None
+
+# feature matrix parameters
+matrix:
+  k: 31
+  feat_mode: "count"
+  max_features: 100_000
+
+
+hydra:
+  # Logging configuration: https://hydra.cc/docs/tutorials/basic/running_your_app/logging/
+  verbose: False
+  # Logs to stdout and to a file.
+  job_logging:
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: colorlog
+        stream: ext://sys.stdout
+      file:
+        class: logging.FileHandler
+        formatter: simple
+        filename: ${hydra.runtime.output_dir}/${hydra.job.name}.log # Saves to a file in the run directory
+        # filename: ${hydra.runtime.output_dir}/${hydra.job.name}_${oc.select:hydra.job.num, 0}.log
+  # Set the output directory to /tmp to dump logs.
+  run:
+    dir: /home/mila/n/naga-karthik.enamundram/genomicFMs/results/${now:%Y%m%d}/${now:%H%M%S}
+    # dir: /tmp/hydra/logs/${hydra.job.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: /home/mila/n/naga-karthik.enamundram/genomicFMs/results/${now:%Y%m%d}/${now:%H%M%S}
+    subdir: ${hydra.job.num}
