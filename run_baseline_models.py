@@ -243,6 +243,7 @@ def main(cfg: DictConfig):
         logger.info(f"Number of samples in the dataset: {len(dataset_list)}")
 
     logger.info("Initializing K-mer class to build feature matrix ...")
+    path_species = os.path.join(cfg.path_out_cache, pathogen)
     kmer_features = KmerFeatures(
         k=k,
         mode=feature_mode,                                      # Essential for resistance gene dosage effects
@@ -251,47 +252,55 @@ def main(cfg: DictConfig):
         batch_size=256,                                         # Smaller batches for memory efficiency
         use_canonical=True,
         use_sparse=cfg.dataset.use_sparse,                            # Use sparse matrix for k-mer features
-        path_full_matrix=os.path.join(cfg.dataset.path_csv, f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_5M.npz"),
-        path_kmers=os.path.join(cfg.dataset.path_csv, f"{patho_short}__{antibiotic}__k_{k}.pkl"),
+        path_full_matrix=os.path.join(path_species, "feature_matrices", f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_5M.npz"),
+        path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.pkl"),
     )
     
-    # Build feature matrix
-    X, y = kmer_features.build_feature_matrix(dataset=dataset_list)
-    logger.info(f"Feature matrix shape: {X.shape}")
-    logger.info(f"Number of samples: {X.shape[0]}")
-
-    if cfg.debug:
-        # plot UMAP of the feature matrix with different metrics
-        # metrics = ["jaccard", "rogerstanimoto", "euclidean", "canberra", "cosine"]
-        metrics = ["jaccard", "cosine"]
-        for metric in metrics:
-            logger.info(f"Plotting UMAP with metric: {metric}")
-            start_time = time.time()
-            plot_umap(X, y, metric=metric,
-                    title=f"UMAP of feature matrix; K: {k}; Mode: {feature_mode}; Metric: {metric}", 
-                    save_path=os.path.join(output_dir, f"umap__{fname}__{metric}.png"))
-            logger.info(f"UMAP plot for {metric} completed in {time.time() - start_time:.2f} seconds")
-
-
-    # # Initialize wandb
-    # # Open the sweep config from the yaml, defining sweep hyperparams and ranges
-    # with open("./amr-pred/XGB-sweep.yaml", 'r') as config_file:
-    #     sweep_config = yaml.safe_load(config_file)
+    if cfg.build_only:
+        logger.info("Only building the feature matrix ...")
+        # Build the feature matrix and save it
+        kmer_features.build_feature_matrix(dataset=dataset_list)
+        # logger.info(f"Feature matrix saved at {kmer_features.path_full_matrix}")
+        return
     
-    # Initialize the summary run to collect results from the sweeps across folds
-    init_summary_wandb(cfg, config=fixed_config)
+    else:
+        # Build feature matrix
+        X, y = kmer_features.build_feature_matrix(dataset=dataset_list)
+        logger.info(f"Feature matrix shape: {X.shape}")
+        logger.info(f"Number of samples: {X.shape[0]}")
 
-    # Train XGBoost
-    model = hydra.utils.instantiate(cfg.model)
-    logger.info(f"Training {model.__class__.__name__} model...")
-    results_dict, best_classification_report = fitmodel_nestedcv(X, y, model, config=cfg, use_sweeps=False)#, prescribed_fold=args.fold_idx)
+        if cfg.debug:
+            # plot UMAP of the feature matrix with different metrics
+            # metrics = ["jaccard", "rogerstanimoto", "euclidean", "canberra", "cosine"]
+            metrics = ["jaccard", "cosine"]
+            for metric in metrics:
+                logger.info(f"Plotting UMAP with metric: {metric}")
+                start_time = time.time()
+                plot_umap(X, y, metric=metric,
+                        title=f"UMAP of feature matrix; K: {k}; Mode: {feature_mode}; Metric: {metric}", 
+                        save_path=os.path.join(output_dir, f"umap__{fname}__{metric}.png"))
+                logger.info(f"UMAP plot for {metric} completed in {time.time() - start_time:.2f} seconds")
 
-    # Save the results to a CSV file
-    save_fname = f"results_{cfg.model.name}__{fname}"
-    path_out = os.path.join(output_dir, save_fname)
-    logger.info(f"Results saved to {path_out} ...")
-    results_df = pd.DataFrame([results_dict])
-    results_df.to_csv(f"{path_out}.csv", index=False)
+
+        # # Initialize wandb
+        # # Open the sweep config from the yaml, defining sweep hyperparams and ranges
+        # with open("./amr-pred/XGB-sweep.yaml", 'r') as config_file:
+        #     sweep_config = yaml.safe_load(config_file)
+        
+        # Initialize the summary run to collect results from the sweeps across folds
+        init_summary_wandb(cfg, config=fixed_config)
+
+        # Train XGBoost
+        model = hydra.utils.instantiate(cfg.model)
+        logger.info(f"Training {model.__class__.__name__} model...")
+        results_dict, best_classification_report = fitmodel_nestedcv(X, y, model, config=cfg, use_sweeps=False)#, prescribed_fold=args.fold_idx)
+
+        # Save the results to a CSV file
+        save_fname = f"results_{cfg.model.name}__{fname}"
+        path_out = os.path.join(output_dir, save_fname)
+        logger.info(f"Results saved to {path_out} ...")
+        results_df = pd.DataFrame([results_dict])
+        results_df.to_csv(f"{path_out}.csv", index=False)
 
 if __name__ == "__main__":
     main()
