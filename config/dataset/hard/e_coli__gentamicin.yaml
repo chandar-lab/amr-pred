@@ -1,0 +1,12 @@
+# path to the fasta files
+path_dataroot: "/home/mila/n/naga-karthik.enamundram/scratch/amr_genomic_data/escherichia_coli/"
+
+# path to the csv file
+path_csv: "/home/mila/n/naga-karthik.enamundram/genomicFMs/ncbi_resistance_phenotypes_asts/datasets_reinterpreted/escherichia_coli/filtered"
+
+# pathogen and antibiotic
+pathogen: "escherichia_coli"
+antibiotic: "gentamicin"
+
+# use sparse matrix or not
+use_sparse: False

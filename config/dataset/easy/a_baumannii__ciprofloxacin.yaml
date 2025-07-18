@@ -1,0 +1,12 @@
+# path to the fasta files
+path_dataroot: "/home/mila/n/naga-karthik.enamundram/scratch/amr_genomic_data/acinetobacter_baumannii/"
+
+# path to the csv file
+path_csv: "/home/mila/n/naga-karthik.enamundram/genomicFMs/ncbi_resistance_phenotypes_asts/datasets_reinterpreted/acinetobacter_baumannii/filtered"
+
+# pathogen and antibiotic
+pathogen: "acinetobacter_baumannii"
+antibiotic: "ciprofloxacin"
+
+# use sparse matrix or not
+use_sparse: False

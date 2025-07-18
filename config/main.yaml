@@ -7,9 +7,10 @@ defaults:
 
 seed: 42
 debug: False
+num_folds: 5
 
-# output directory
-path_out: None
+# output directory for caching the feature matrix and kmers
+path_out_cache: /home/mila/n/naga-karthik.enamundram/scratch/cache_amr
 
 # feature matrix parameters
 matrix:
@@ -17,6 +18,15 @@ matrix:
   feat_mode: "count"
   max_features: 100_000
 
+# argument to build the feature matrix only
+build_only: False
+
+wandb:
+  project: "amr-prediction"
+  entity: "naga-karthik"
+  use_sweeps: False
+  sweep_runs_per_fold: 50
+  # mode: "online" # Set to "offline" to disable logging
 
 hydra:
   # Logging configuration: https://hydra.cc/docs/tutorials/basic/running_your_app/logging/
