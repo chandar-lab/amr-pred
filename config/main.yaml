@@ -22,10 +22,10 @@ matrix:
 build_only: False
 
 wandb:
-  project: "amr-prediction"
+  project: "AMR"
   entity: "naga-karthik"
   use_sweeps: False
-  sweep_runs_per_fold: 50
+  sweep_runs_per_fold: 25
   # mode: "online" # Set to "offline" to disable logging
 
 hydra:
