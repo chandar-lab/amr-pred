@@ -1,5 +1,5 @@
 defaults:
-  - dataset: easy/a_baumannii__ciprofloxacin
+  - dataset: hard/p_aeruginosa__cefepime
   - model: xgboost
   - override hydra/job_logging: colorlog
   - override hydra/hydra_logging: colorlog
@@ -35,8 +35,8 @@ hydra:
         # filename: ${hydra.runtime.output_dir}/${hydra.job.name}_${oc.select:hydra.job.num, 0}.log
   # Set the output directory to /tmp to dump logs.
   run:
-    dir: /home/mila/n/naga-karthik.enamundram/genomicFMs/results/${now:%Y%m%d}/${now:%H%M%S}
+    dir: ./results/${now:%Y%m%d}/${now:%H%M%S}
     # dir: /tmp/hydra/logs/${hydra.job.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
-    dir: /home/mila/n/naga-karthik.enamundram/genomicFMs/results/${now:%Y%m%d}/${now:%H%M%S}
+    dir: ./results/${now:%Y%m%d}/${now:%H%M%S}
     subdir: ${hydra.job.num}
