@@ -10,8 +10,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-from genomic_dst_utils import mash_distance_txt, ani_distance_txt, dashing_distance_txt
-from data_utils import load_data
+from data.genomic_dst_utils import mash_distance_txt, ani_distance_txt, dashing_distance_txt
+from data.data_utils import load_data
 
 
 def parse_args():
@@ -64,36 +64,42 @@ def get_matrix(assemblies_txt, path_root_fna, method='dashing', force_regenerate
     
     return dist_matrix
 
-def main():
-    # Example run command:
-    # --path-dataroot ../amr_genomic_data/pseudomonas_aeruginosa --path-csv ./datasets --pathogen pseudomonas_aeruginosa --antibiotic cefepime
-    args = parse_args()
+def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5, dist_method='dashing', force_regenerate=False):
+    """
+    Generate genomic distance folds for a given pathogen and antibiotic.
+    parameters:
+    - pathogen: str, name of the pathogen (e.g., 'pseudomonas_aeruginosa')
+    - antibiotic: str, name of the antibiotic (e.g., 'cefepime')
+    - path_dataroot: str, root path of the dataset genomic assemblies
+    - path_csv: str, path to the folder containing CSV files for each specie-drug combination
+    - num_folds: int, number of folds to create (default is 5
+    - dist_method: str, method to use for distance calculation ('mash', 'ani', or 'dashing', default is 'dashing')
+    - force_regenerate: bool, whether to force regeneration of the assemblies list and distance matrix
+    returns:
+    - fold_assignments: dict, mapping of assembly names to fold numbers
+    """
+    fold_assignments_csv = os.path.join(path_dataroot, f"{pathogen}__{antibiotic}__{dist_method}__phylogeny_folds.csv")
 
-    # Set up logging (copied from run_baseline_models.py)
-    now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
-    path_out = os.path.join("/home/mila/a/aselstya/scratch/amr/results", now.split('_')[0], now.split('_')[1])
-    os.makedirs(path_out, exist_ok=True)
-    file_handler = logging.FileHandler(os.path.join(path_out, f"log__{args.pathogen}__{args.antibiotic}__phylogeny_split.txt"))
-    console_handler = logging.StreamHandler()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[file_handler, console_handler]
-    )
+    # Return the fold assignments as a dict if the file already exists
+    if os.path.isfile(fold_assignments_csv) and not force_regenerate:
+        logging.info(f"Fold assignments already exist at {fold_assignments_csv}, loading from file.")
+        fold_assignments_df = pd.read_csv(fold_assignments_csv)
+        fold_assignments = dict(zip(fold_assignments_df['assembly'], fold_assignments_df['fold']))
+        return fold_assignments
 
     # Task 1: Generate files with list of assemblies for the pathogen
-    path_root_fna = args.path_dataroot
-    path_csv = args.path_csv
+    path_root_fna = path_dataroot
+    path_csv = path_csv
 
-    dataset = f"{args.pathogen}/filtered/{args.pathogen}__{args.antibiotic}_SR_filt.csv"
+    dataset = f"{pathogen}__{antibiotic}_SR_filt.csv"
     path_data_csv = os.path.join(path_csv, dataset)
     if not os.path.isfile(path_data_csv):
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
     
     # Generate the file with paths to all assemblies for the pathogen, if needed
     assemblies_txt = os.path.join(path_root_fna, "all_assemblies.txt")
-    if (not os.path.isfile(os.path.join(assemblies_txt))) or args.force_regenerate:
-        logging.info(f"Generating list of assemblies for {args.pathogen}...")
+    if (not os.path.isfile(os.path.join(assemblies_txt))) or force_regenerate:
+        logging.info(f"Generating list of assemblies for {pathogen}...")
         # Get all assemblies from the path_root_fna folder, and put them in a list
         subfolders = os.listdir(path_root_fna)
         assembly_files = [glob.glob(os.path.join(path_root_fna, folder, "ncbi_dataset", "data", folder, "*.fna"))[0] for folder in subfolders if os.path.isdir(os.path.join(path_root_fna, folder))]
@@ -114,8 +120,8 @@ def main():
 
 
     # Task 2: Generate and save distance matrix for the assemblies using the desired distance metric
-    dashing_matrix = get_matrix(assemblies_txt, path_root_fna, method=args.dist_method, force_regenerate=args.force_regenerate)
-    logging.info(f"Distance matrix shape: {dashing_matrix.shape}")
+    full_pathogen_matrix = get_matrix(assemblies_txt, path_root_fna, method=dist_method, force_regenerate=force_regenerate)
+    logging.info(f"Full pathogen distance matrix shape: {full_pathogen_matrix.shape}")
 
     # Task 3: determine which assemblies are relevant for the antibiotic
     # Load the data using the load_data function
@@ -126,10 +132,10 @@ def main():
 
     # Create a list of indices for the assemblies that are also in the dataset_list
     relevant_indices = [i for i, assembly in enumerate(all_pathogen_assemblies) if assembly in dataset_assemblies]
-    print(f"Number of relevant assemblies for {args.pathogen} and {args.antibiotic}: {len(relevant_indices)}")
+    print(f"Number of relevant assemblies for {pathogen} and {antibiotic}: {len(relevant_indices)}")
 
     # Filter the matrix to only include the relevant assemblies
-    specie_drug_dist_matrix = dashing_matrix[np.ix_(relevant_indices, relevant_indices)]
+    specie_drug_dist_matrix = full_pathogen_matrix[np.ix_(relevant_indices, relevant_indices)]
     logging.info(f"Filtered distance matrix shape: {specie_drug_dist_matrix.shape}")
 
 
@@ -140,9 +146,9 @@ def main():
 
     ### Use the method described in Learning From Limited Data: "Towards Best Practice Techniques for Antimicrobial Resistance Prediction From Whole Genome Sequencing Data", 2021
 
-    logging.info(f"Creating {args.folds} folds based on the distance matrix...")
+    logging.info(f"Creating {num_folds} folds based on the distance matrix...")
     # Begin by selecting seeds, equal to the number of folds, which act as the centroids of the folds.
-    num_folds = args.folds
+
     fold_seeds = [] # List of indices of the assemblies that will be used as seeds for the folds
     # Begin by selecting the pair of seeds with the maximum distance between them
     # This can be done by finding the single biggest entry in the matrix
@@ -179,9 +185,9 @@ def main():
             fold_sizes[len(fold_assignments) % num_folds] += 1
 
 
-    print("Fold assignments:")
-    for assembly, fold in fold_assignments.items():
-        print(f"{assembly}: Fold {fold + 1}")
+    # print("Fold assignments:")
+    # for assembly, fold in fold_assignments.items():
+    #     print(f"{assembly}: Fold {fold}")
 
     # Print the size of each fold 
     logging.info(f"Fold sizes: {fold_sizes}")
@@ -189,11 +195,32 @@ def main():
     # Save the fold assignments to a CSV file
     fold_assignments_df = pd.DataFrame(list(fold_assignments.items()), columns=['assembly', 'fold'])
     # Save to csv in the path_root_fna folder
-    fold_assignments_csv = os.path.join(path_root_fna, f"{args.pathogen}__{args.antibiotic}__phylogeny_folds.csv")
+    fold_assignments_csv = os.path.join(path_root_fna, f"{pathogen}__{antibiotic}__phylogeny_folds.csv")
     fold_assignments_df.to_csv(fold_assignments_csv, index=False)
     logging.info(f"Fold assignments saved to {fold_assignments_csv}")
+
+    # Return the fold assignments as a dict
+    fold_assignments = dict(zip(fold_assignments_df['assembly'], fold_assignments_df['fold']))
+    return fold_assignments
 
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    # Example usage to pre-generate folds:
+    # --path-dataroot ../amr_genomic_data/pseudomonas_aeruginosa --path-csv ./datasets --pathogen pseudomonas_aeruginosa --antibiotic cefepime
+
+        # Set up logging (copied from run_baseline_models.py)
+    now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
+    path_out = os.path.join("/home/mila/a/aselstya/scratch/amr/results", now.split('_')[0], now.split('_')[1])
+    os.makedirs(path_out, exist_ok=True)
+    file_handler = logging.FileHandler(os.path.join(path_out, f"log__{args.pathogen}__{args.antibiotic}__phylogeny_split.txt"))
+    console_handler = logging.StreamHandler()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[file_handler, console_handler]
+    )
+
+    # Generate the genomic folds based on the provided arguments
+    get_genomic_folds(args.pathogen, args.antibiotic, args.path_dataroot, args.path_csv, args.folds, args.dist_method, args.force_regenerate)

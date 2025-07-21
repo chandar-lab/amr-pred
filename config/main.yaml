@@ -9,21 +9,29 @@ seed: 42
 debug: False
 num_folds: 5
 
+# Primary directories where the data is stored
+path_assemblies_root: "../amr_genomic_data" # FOR NAGA: Use "/home/mila/n/naga-karthik.enamundram/scratch/amr_genomic_data"
+path_csv: "./datasets" # FOR NAGA: Use "/home/mila/n/naga-karthik.enamundram/genomicFMs/ncbi_resistance_phenotypes_asts/datasets_reinterpreted"
+
 # output directory for caching the feature matrix and kmers
-path_out_cache: /home/mila/n/naga-karthik.enamundram/scratch/cache_amr
+path_out_cache: ./datasets
 
 # feature matrix parameters
 matrix:
   k: 31
   feat_mode: "count"
-  max_features: 100_000
+  max_features: 1_000_000
 
 # argument to build the feature matrix only
 build_only: False
 
+# Arguments for the genomic distance based splits
+use_genomic_splits: True # If False, will use random splits
+split_method: "dashing" #Options: "dashing", "mash", "ani". Only used if use_genomic_splits is True
+
 wandb:
   project: "amr-prediction"
-  entity: "naga-karthik"
+  entity: "aselstyne"
   use_sweeps: False
   sweep_runs_per_fold: 50
   # mode: "online" # Set to "offline" to disable logging

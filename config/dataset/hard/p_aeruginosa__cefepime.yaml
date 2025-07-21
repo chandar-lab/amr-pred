@@ -1,8 +1,8 @@
 # path to the fasta files
-path_dataroot: "../amr_genomic_data/pseudomonas_aeruginosa/"
+path_dataroot: ${path_assemblies_root}/pseudomonas_aeruginosa/
 
 # path to the csv file
-path_csv: "./datasets/pseudomonas_aeruginosa/filtered"
+path_csv: ${path_csv}/pseudomonas_aeruginosa/filtered
 
 # pathogen and antibiotic
 pathogen: "pseudomonas_aeruginosa"
