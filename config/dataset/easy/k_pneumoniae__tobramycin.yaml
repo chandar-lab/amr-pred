@@ -2,7 +2,7 @@
 path_dataroot: ${path_assemblies_root}/klebsiella_pneumoniae/
 
 # path to the csv file
-path_csv: ${path_csv}/klebsiella_pneumoniae/filtered
+path_csv: ${path_datasets_reinterpreted}/klebsiella_pneumoniae/filtered
 
 # pathogen and antibiotic
 pathogen: "klebsiella_pneumoniae"

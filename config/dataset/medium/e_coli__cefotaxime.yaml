@@ -2,7 +2,7 @@
 path_dataroot: ${path_assemblies_root}/escherichia_coli/
 
 # path to the csv file
-path_csv: ${path_csv}/escherichia_coli/filtered
+path_csv: ${path_datasets_reinterpreted}/escherichia_coli/filtered
 
 # pathogen and antibiotic
 pathogen: "escherichia_coli"

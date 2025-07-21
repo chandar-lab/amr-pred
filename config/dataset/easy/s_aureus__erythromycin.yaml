@@ -2,7 +2,7 @@
 path_dataroot: ${path_assemblies_root}/staphylococcus_aureus/
 
 # path to the csv file
-path_csv: ${path_csv}/staphylococcus_aureus/filtered
+path_csv: ${path_datasets_reinterpreted}/staphylococcus_aureus/filtered
 
 # pathogen and antibiotic
 pathogen: "staphylococcus_aureus"

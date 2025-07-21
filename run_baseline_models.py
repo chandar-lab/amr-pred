@@ -1,5 +1,4 @@
 import os
-import numpy as np
 import time
 import logging
 import wandb
@@ -17,7 +16,7 @@ from features.utils import plot_umap
 from data.data_utils import load_data
 from data.generate_phylogeny_folds import get_genomic_folds
 from training.train_utils import compute_major_errors
-from training.wandb_utils import WandbFoldTrainer, init_summary_wandb
+from training.wandb_utils import WandbFoldTrainer
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -28,168 +27,82 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     
     logger.info(f"Starting {config.num_folds}-Fold CV for {modelname}...")
 
-    # --- Logic for use_sweeps=True ---
-    if use_sweeps:
-        api = wandb.Api()
-        summary_run = api.run(f"{config.wandb.project}/{fixed_run_config['summary_wandb_id']}")
-        summary_run.summary["best_score"] = -1
-        summary_run.summary["best_fold_idx"] = -1
-        summary_run.update()
+    fold_results = []
+    best_overall_score = -1
+    best_classification_report = ""
 
-        for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
-            start = time.process_time()
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = pheno[train_idx], pheno[test_idx]
+    for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
+        start = time.process_time()
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = pheno[train_idx], pheno[test_idx]
+        
+        current_model = clone(estimator)
 
-            logger.info(f"Performing grid search for {modelname} in fold {fold_idx+1} using W&B")
+        if use_sweeps:
+            logger.info(f"Running sweep for fold {fold_idx+1}...")
             sweep_id = wandb.sweep(sweep_config, project=config.wandb.project)
-
-            # Create the trainer obj and run the sweep. 
-            trainer = WandbFoldTrainer(estimator, fixed_run_config, X_train, y_train, fold_idx)
+            trainer = WandbFoldTrainer(current_model, fixed_run_config, X_train, y_train, fold_idx)
             wandb.agent(sweep_id, function=trainer, count=config.wandb.sweep_runs_per_fold)
-
+            
             logger.info(f"Best parameters in fold {fold_idx+1}: {trainer.best_params}")
-            
-            # Use the best hyperparam config to train on full training set and predict on the test set
-            logger.info(f"Training on full training set with best parameters...")
-            current_model = trainer.best_model
-            current_model.fit(X_train, y_train)
-            y_pred = current_model.predict(X_test)
-            
-            wandb.teardown()    # to close the sweep run
-            # Update the summary run with the ID of the best performing hyperparam combo
-            summary_run.summary[f"fold_runs"].append(trainer.best_id)
-            summary_run.update()
+            current_model = trainer.best_model # Get the best model from the sweep
+            # Clean up wandb state for the next fold's sweep
+            wandb.teardown()
+        else:
+             logger.info(f"Training {modelname} in fold {fold_idx+1} with fixed parameters.")
 
-            # Log metrics to the best run from the sweep
-            fold_wandb_run = api.run(f"{config.wandb.project}/{trainer.best_id}")
+        # Fit the best model (from sweep) or the standard model on the full training set for the fold
+        current_model.fit(X_train, y_train)
+        y_pred = current_model.predict(X_test)
+        
+        # Evaluate
+        score = balanced_accuracy_score(y_test, y_pred)
+        f1_macro = classification_report(y_test, y_pred, output_dict=True)['macro avg']['f1-score']
+        vme, me = compute_major_errors(y_test, y_pred)
+        
+        fold_results.append({
+            "model_name": modelname, "pathogen": fixed_run_config['pathogen'],
+            "pathogen_short": fixed_run_config['pathogen_short'],
+            "antibiotic": fixed_run_config['antibiotic'], 
+            "k": fixed_run_config['k'], "feat_mode": fixed_run_config['feat_mode'],
+            "max_features": fixed_run_config['max_features'],
+            "seed": fixed_run_config['seed'], 
+            "fold": fold_idx,
+            "balanced_accuracy": score,
+            "f1_macro": f1_macro,
+            "very_major_error": vme,
+            "major_error": me,
+            "fold_time": time.process_time() - start
+        })
+        
+        if score > best_overall_score:
+            best_overall_score = score
+            best_classification_report = classification_report(y_test, y_pred, digits=4)
 
-            # Compute metrics
-            score = balanced_accuracy_score(y_test, y_pred)
-            f1_macro = classification_report(y_test, y_pred, output_dict=True)['macro avg']['f1-score']
-            vme, me = compute_major_errors(y_test, y_pred)
+        logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f} - Time: {time.process_time() - start:.2f}s")
 
-            # Log metrics to the fold run
-            wandb_run_metrics = {
-                "fold_idx": int(fold_idx + 1), "balanced_accuracy": float(score),
-                "f1_macro": float(f1_macro), "fold_time": float(time.process_time() - start),
-                "very_major_error": float(vme), "major_error": float(me),
-                "fda_vme_passed": bool(vme < 0.015), "fda_me_passed": bool(me < 0.03),
-            }
-            for key, value in wandb_run_metrics.items():
-                fold_wandb_run.summary[key] = value
-            fold_wandb_run.update()
-
-            if score > summary_run.summary["best_score"]:
-                summary_run.summary["best_score"] = score
-                summary_run.summary["best_y_test"] = y_test.copy()
-                summary_run.summary["best_y_pred"] = y_pred.copy()
-                summary_run.summary["best_fold_idx"] = fold_idx+1
-                summary_run.update()
-
-            logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f}")
+    # --- After all folds, create a summary and log to the main wandb run ---
+    logger.info("CV finished. Logging summary results to W&B...")
     
-    # --- Logic for use_sweeps=False ---
-    else:
-        bal_acc_scores, f1_macro_scores, vme_scores, me_scores, fold_times = [], [], [], [], []
-        best_score = -1
-        best_report_dict = {}
-        best_report_str = ""
-        
-        # Train with fixed parameters across folds, and then log the results
-        for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
-            start = time.process_time()
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = pheno[train_idx], pheno[test_idx]
-
-            logger.info(f"Training {modelname} in fold {fold_idx+1} with fixed/default parameters.")
-            current_model = clone(estimator)
-            current_model.fit(X_train, y_train)
-            y_pred = current_model.predict(X_test)
-            
-            score = balanced_accuracy_score(y_test, y_pred)
-            bal_acc_scores.append(score)
-            f1_macro_scores.append(classification_report(y_test, y_pred, output_dict=True)['macro avg']['f1-score'])
-            vme, me = compute_major_errors(y_test, y_pred)
-            vme_scores.append(vme)
-            me_scores.append(me)
-            fold_times.append(time.process_time() - start)
-
-            if score > best_score:
-                best_score = score
-                best_report_dict = classification_report(y_test, y_pred, digits=4, output_dict=True)
-                best_report_str = classification_report(y_test, y_pred, digits=4)
-
-            logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f}")
-
-        # After all folds, create one summary run and log the results
-        logger.info("CV finished. Logging summary results to W&B...")
-        patho_short = fixed_run_config['pathogen_short']
-        summary_run_name = f"summary__{patho_short}__{config.dataset.antibiotic}__k_{config.matrix.k}__mode_{config.matrix.feat_mode}__feat_{config.matrix.max_features//1000}K__{modelname}"
-        
-        with wandb.init(
-            project=config.wandb.project, name=summary_run_name, 
-            config=fixed_run_config, tags=["summary", "fixed_params", "baseline"]
-        ) as summary_run:
-            
-            mean_me, std_me = np.mean(me_scores), np.std(me_scores)
-            mean_vme, std_vme = np.mean(vme_scores), np.std(vme_scores)
-            mean_bal_acc, std_bal_acc = np.mean(bal_acc_scores), np.std(bal_acc_scores)
-            mean_f1_macro, std_f1_macro = np.mean(f1_macro_scores), np.std(f1_macro_scores)
-
-            wandb_tracked_values = {
-                'model_name': modelname,
-                "mean_fold_time": np.mean(fold_times),
-                "mean_major_error": mean_me, "std_major_error": std_me,
-                "mean_very_major_error": mean_vme, "std_very_major_error": std_vme,
-                "mean_balanced_accuracy": mean_bal_acc, "std_balanced_accuracy": std_bal_acc,
-                "mean_f1_macro": mean_f1_macro, "std_f1_macro": std_f1_macro,
-                "fda_me_passed": bool(mean_me < 0.03), "fda_vme_passed": bool(mean_vme < 0.015),
-                # "best_fold_accuracy": best_score,
-                # "best_classification_report": best_report_str
-            }
-            summary_run.log(wandb_tracked_values)
-
-            return wandb_tracked_values, best_report_dict
-
-    # --- Summary for use_sweeps=True ---
-    api = wandb.Api()
-    summary_run = api.run(f"{config.wandb.project}/{fixed_run_config['summary_wandb_id']}")
-    bal_acc_scores, f1_macro_scores, vme_scores, me_scores, fold_times = [], [], [], [], []
-
-    for run_id in summary_run.summary.get("fold_runs", []):
-        run = api.run(f"{config.wandb.project}/{run_id}")
-        bal_acc_scores.append(run.summary.get("balanced_accuracy", 0))
-        f1_macro_scores.append(run.summary.get("f1_macro", 0))
-        vme_scores.append(run.summary.get("very_major_error", 0))
-        me_scores.append(run.summary.get("major_error", 0))
-        fold_times.append(run.summary.get("fold_time", 0))
-
-    best_report_dict = classification_report(
-        summary_run.summary["best_y_test"], 
-        summary_run.summary["best_y_pred"], 
-        digits=4, output_dict=True
-    )
-
-    mean_me, std_me = np.mean(me_scores), np.std(me_scores)
-    mean_vme, std_vme = np.mean(vme_scores), np.std(vme_scores)
-    mean_bal_acc, std_bal_acc = np.mean(bal_acc_scores), np.std(bal_acc_scores)
-    mean_f1_macro, std_f1_macro = np.mean(f1_macro_scores), np.std(f1_macro_scores)
-
-    wandb_tracked_values = {
-        'model_name': modelname, "mean_fold_time": np.mean(fold_times),
-        "mean_major_error": mean_me, "std_major_error": std_me,
-        "mean_very_major_error": mean_vme, "std_very_major_error": std_vme,
-        "mean_balanced_accuracy": mean_bal_acc, "std_balanced_accuracy": std_bal_acc,
-        "mean_f1_macro": mean_f1_macro, "std_f1_macro": std_f1_macro,
-        "fda_me_passed": bool(mean_me < 0.03), "fda_vme_passed": bool(mean_vme < 0.015),
+    # Create a pandas DataFrame for easy calculation and table logging
+    results_df = pd.DataFrame(fold_results)
+    
+    # Calculate and log summary statistics
+    summary_stats = {
+        "mean_balanced_accuracy": results_df['balanced_accuracy'].mean(),
+        "std_balanced_accuracy": results_df['balanced_accuracy'].std(),
+        "mean_f1_macro": results_df['f1_macro'].mean(),
+        "std_f1_macro": results_df['f1_macro'].std(),
+        "mean_very_major_error": results_df['very_major_error'].mean(),
+        "mean_major_error": results_df['major_error'].mean(),
+        "mean_fold_time": results_df['fold_time'].mean(),
+        "fda_me_passed": bool(results_df['major_error'].mean() < 0.03),
+        "fda_vme_passed": bool(results_df['very_major_error'].mean() < 0.015),
+        # "best_classification_report": best_classification_report,
+        # "best_fold_accuracy": best_overall_score
     }
-
-    for key, value in wandb_tracked_values.items():
-        summary_run.summary[key] = value
-    summary_run.update()
-
-    return wandb_tracked_values, best_report_dict
+    
+    return summary_stats, best_classification_report, results_df
 
 
 # config_path is a directory relative to this file (run_baseline_models.py)
@@ -265,38 +178,25 @@ def main(cfg: DictConfig):
                         save_path=os.path.join(output_dir, f"umap__{fname}__{metric}.png"))
                 logger.info(f"UMAP plot for {metric} completed in {time.time() - start_time:.2f} seconds")
 
-
-        # --- UPDATED: W&B and Sweep Configuration ---
-        fixed_config = {}
-        sweep_config = None
         
         # Determine if we are running sweeps based on hydra config
-        # use_sweeps = "sweep" in cfg.model and cfg.model.sweep is not None
         use_sweeps = True if cfg.wandb.use_sweeps else False
-
+        patho_short = f"{cfg.dataset.pathogen.split('_')[0][0]}_{cfg.dataset.pathogen.split('_')[1]}"
+        
+        # Define fixed parameters for the run
+        fixed_config = {
+            "pathogen": cfg.dataset.pathogen, "antibiotic": cfg.dataset.antibiotic,
+            "pathogen_short": patho_short, "k": cfg.matrix.k,
+            "feat_mode": cfg.matrix.feat_mode, "max_features": f"{cfg.matrix.max_features//1000}K",
+            "use_sparse": cfg.dataset.use_sparse, "seed": cfg.seed,
+        }
+        
+        sweep_config = None
         if use_sweeps:
-            logger.info("Mode: Hyperparameter sweep using W&B.")
-            # Create a summary run on WandB to track sweep results across folds
-            fixed_config = init_summary_wandb(cfg)
-            
-            # Convert hydra sweep config to a wandb-compatible dict
             sweep_config = OmegaConf.to_container(cfg.model.sweep, resolve=True)
-            
-            # Add a descriptive name for the sweep entity on the W&B dashboard
-            patho_short = fixed_config['pathogen_short']
-            sweep_name = f"SWEEP__{patho_short}__{cfg.dataset.antibiotic}__id_{fixed_config['id']}"
+            sweep_name = f"SWEEP__{patho_short}__{cfg.dataset.antibiotic}"
             sweep_config['name'] = sweep_name
 
-        else:
-            logger.info("Mode: Training with fixed/default parameters.")
-            # For non-sweep runs, we'll create the config dict directly
-            patho_short = f"{cfg.dataset.pathogen.split('_')[0][0]}_{cfg.dataset.pathogen.split('_')[1]}"
-            fixed_config = {
-                "pathogen": cfg.dataset.pathogen, "antibiotic": cfg.dataset.antibiotic,
-                "pathogen_short": patho_short, "k": cfg.matrix.k,
-                "feat_mode": cfg.matrix.feat_mode, "max_features": f"{cfg.matrix.max_features//1000}K",
-                "use_sparse": cfg.dataset.use_sparse,
-            }
         
         # --- Setup train/test splits ---
         cv_splits = []
@@ -330,20 +230,32 @@ def main(cfg: DictConfig):
 
         # --- Train Model ---
         model = hydra.utils.instantiate(cfg.model)
+
         logger.info(f"Training {model.__class__.__name__} model...")
-        results_dict, best_classification_report = fitmodel_nestedcv(
+        summary_stats, best_classification_report, fold_results_df = fitmodel_nestedcv(
             X, y, cv_splits, model, config=cfg, 
             use_sweeps=use_sweeps, 
             sweep_config=sweep_config,
             fixed_run_config=fixed_config
         )
 
-        # Save the results to a CSV file
-        save_fname = f"results_{cfg.model.name}__{fname}"
-        path_out = os.path.join(output_dir, save_fname)
-        logger.info(f"Results saved to {path_out} ...")
-        results_df = pd.DataFrame([results_dict])
-        results_df.to_csv(f"{path_out}.csv", index=False)
+        # initialize a single wandb run for the whole experiment 
+        run_name = f"{cfg.model.name}__{fname}"
+        with wandb.init(
+            project=cfg.wandb.project, name=run_name, 
+            config=fixed_config, tags=["summary", "baseline", "cv"]
+            ) as run:
+
+            logger.info("Logging summary results to W&B...")
+            run.log(summary_stats)
+            run.log({"fold_results": wandb.Table(dataframe=fold_results_df)})
+
+            # Save the results to a CSV file
+            save_fname = f"results_{cfg.model.name}__{fname}"
+            path_out = os.path.join(output_dir, save_fname)
+            logger.info(f"Results saved to {path_out} ...")
+            # results_df = pd.DataFrame(results)
+            fold_results_df.to_csv(f"{path_out}.csv", index=False)
 
         
 

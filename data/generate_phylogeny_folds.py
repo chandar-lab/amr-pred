@@ -79,10 +79,11 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
     - fold_assignments: dict, mapping of assembly names to fold numbers
     """
     fold_assignments_csv = os.path.join(path_dataroot, f"{pathogen}__{antibiotic}__{dist_method}__phylogeny_folds.csv")
+    logger = logging.getLogger(__name__) # Ensures the messages sent to the logger have the function name
 
     # Return the fold assignments as a dict if the file already exists
     if os.path.isfile(fold_assignments_csv) and not force_regenerate:
-        logging.info(f"Fold assignments already exist at {fold_assignments_csv}, loading from file.")
+        logger.info(f"Fold assignments already exist at {fold_assignments_csv}, loading from file.")
         fold_assignments_df = pd.read_csv(fold_assignments_csv)
         fold_assignments = dict(zip(fold_assignments_df['assembly'], fold_assignments_df['fold']))
         return fold_assignments
@@ -99,7 +100,7 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
     # Generate the file with paths to all assemblies for the pathogen, if needed
     assemblies_txt = os.path.join(path_root_fna, "all_assemblies.txt")
     if (not os.path.isfile(os.path.join(assemblies_txt))) or force_regenerate:
-        logging.info(f"Generating list of assemblies for {pathogen}...")
+        logger.info(f"Generating list of assemblies for {pathogen}...")
         # Get all assemblies from the path_root_fna folder, and put them in a list
         subfolders = os.listdir(path_root_fna)
         assembly_files = [glob.glob(os.path.join(path_root_fna, folder, "ncbi_dataset", "data", folder, "*.fna"))[0] for folder in subfolders if os.path.isdir(os.path.join(path_root_fna, folder))]
@@ -109,7 +110,7 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
             for assembly in assembly_files:
                 f.write(f"{assembly}\n")
     else:
-        logging.info(f"List of assemblies already exists at {assemblies_txt}, skipping regeneration.")
+        logger.info(f"List of assemblies already exists at {assemblies_txt}, skipping regeneration.")
 
     # Make the assemblies list hold only the names of the assemblies, not the full paths
     with open(assemblies_txt, "r") as f:
@@ -121,7 +122,7 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
 
     # Task 2: Generate and save distance matrix for the assemblies using the desired distance metric
     full_pathogen_matrix = get_matrix(assemblies_txt, path_root_fna, method=dist_method, force_regenerate=force_regenerate)
-    logging.info(f"Full pathogen distance matrix shape: {full_pathogen_matrix.shape}")
+    logger.info(f"Full pathogen distance matrix shape: {full_pathogen_matrix.shape}")
 
     # Task 3: determine which assemblies are relevant for the antibiotic
     # Load the data using the load_data function
@@ -136,7 +137,7 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
 
     # Filter the matrix to only include the relevant assemblies
     specie_drug_dist_matrix = full_pathogen_matrix[np.ix_(relevant_indices, relevant_indices)]
-    logging.info(f"Filtered distance matrix shape: {specie_drug_dist_matrix.shape}")
+    logger.info(f"Filtered distance matrix shape: {specie_drug_dist_matrix.shape}")
 
 
     # Task 4: Create folds based on the distance matrix, with a csv
@@ -146,7 +147,7 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
 
     ### Use the method described in Learning From Limited Data: "Towards Best Practice Techniques for Antimicrobial Resistance Prediction From Whole Genome Sequencing Data", 2021
 
-    logging.info(f"Creating {num_folds} folds based on the distance matrix...")
+    logger.info(f"Creating {num_folds} folds based on the distance matrix...")
     # Begin by selecting seeds, equal to the number of folds, which act as the centroids of the folds.
 
     fold_seeds = [] # List of indices of the assemblies that will be used as seeds for the folds
@@ -165,7 +166,7 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
         new_seed = np.argmax(min_distances)
         fold_seeds.append(new_seed)
     
-    logging.info("Assigning assemblies to folds based on the selected seeds...")
+    logger.info("Assigning assemblies to folds based on the selected seeds...")
     # Create a list to hold the fold assignments
     fold_assignments = {}
     assigned_indices = set()
@@ -190,14 +191,13 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
     #     print(f"{assembly}: Fold {fold}")
 
     # Print the size of each fold 
-    logging.info(f"Fold sizes: {fold_sizes}")
+    logger.info(f"Fold sizes: {fold_sizes}")
 
     # Save the fold assignments to a CSV file
     fold_assignments_df = pd.DataFrame(list(fold_assignments.items()), columns=['assembly', 'fold'])
     # Save to csv in the path_root_fna folder
-    fold_assignments_csv = os.path.join(path_root_fna, f"{pathogen}__{antibiotic}__phylogeny_folds.csv")
     fold_assignments_df.to_csv(fold_assignments_csv, index=False)
-    logging.info(f"Fold assignments saved to {fold_assignments_csv}")
+    logger.info(f"Fold assignments saved to {fold_assignments_csv}")
 
     # Return the fold assignments as a dict
     fold_assignments = dict(zip(fold_assignments_df['assembly'], fold_assignments_df['fold']))
