@@ -26,7 +26,7 @@ matrix:
 build_only: False
 
 # Arguments for the genomic distance based splits
-use_genomic_splits: True # If False, will use random splits
+use_genomic_splits: False # If False, will use random splits
 split_method: "dashing" #Options: "dashing", "mash", "ani". Only used if use_genomic_splits is True
 
 wandb:
