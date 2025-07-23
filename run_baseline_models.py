@@ -14,6 +14,7 @@ from sklearn.metrics import (
 from features.kmer import KmerFeatures
 from features.utils import plot_umap
 from data.data_utils import load_data
+from data.generate_phylogeny_folds import get_genomic_folds
 from training.train_utils import compute_major_errors
 from training.wandb_utils import WandbFoldTrainer
 
@@ -21,9 +22,8 @@ from training.wandb_utils import WandbFoldTrainer
 logger = logging.getLogger(__name__)
 
 
-def fitmodel_nestedcv(X, pheno, estimator, config, use_sweeps=False, sweep_config=None, fixed_run_config=None):
+def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, sweep_config=None, fixed_run_config=None):
     modelname = config.model.name
-    outer_cv = StratifiedKFold(n_splits=config.num_folds, shuffle=True, random_state=config.seed)
     
     logger.info(f"Starting {config.num_folds}-Fold CV for {modelname}...")
 
@@ -31,7 +31,7 @@ def fitmodel_nestedcv(X, pheno, estimator, config, use_sweeps=False, sweep_confi
     best_overall_score = -1
     best_classification_report = ""
 
-    for fold_idx, (train_idx, test_idx) in enumerate(outer_cv.split(X, pheno)):
+    for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
         start = time.process_time()
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = pheno[train_idx], pheno[test_idx]
@@ -44,12 +44,12 @@ def fitmodel_nestedcv(X, pheno, estimator, config, use_sweeps=False, sweep_confi
             trainer = WandbFoldTrainer(current_model, fixed_run_config, X_train, y_train, fold_idx)
             wandb.agent(sweep_id, function=trainer, count=config.wandb.sweep_runs_per_fold)
             
-            logger.info(f"Best parameters in fold {fold_idx}: {trainer.best_params}")
+            logger.info(f"Best parameters in fold {fold_idx+1}: {trainer.best_params}")
             current_model = trainer.best_model # Get the best model from the sweep
             # Clean up wandb state for the next fold's sweep
             wandb.teardown()
         else:
-             logger.info(f"Training {modelname} in fold {fold_idx} with fixed parameters.")
+             logger.info(f"Training {modelname} in fold {fold_idx+1} with fixed parameters.")
 
         # Fit the best model (from sweep) or the standard model on the full training set for the fold
         current_model.fit(X_train, y_train)
@@ -197,12 +197,43 @@ def main(cfg: DictConfig):
             sweep_name = f"SWEEP__{patho_short}__{cfg.dataset.antibiotic}"
             sweep_config['name'] = sweep_name
 
+        
+        # --- Setup train/test splits ---
+        cv_splits = []
+        if cfg.use_genomic_splits == True:
+            logger.info("Using phylogeny-based splits for training and testing.")
+            # Get the dictionary for the split indices
+            genomic_dict, _ = get_genomic_folds(
+                pathogen=cfg.dataset.pathogen, antibiotic=cfg.dataset.antibiotic,
+                path_dataroot=cfg.dataset.path_dataroot, path_csv=cfg.dataset.path_csv,
+                num_folds=cfg.num_folds, dist_method=cfg.split_method,
+            )
+            # Use the dict to determine the split indices
+            split_indices = []
+            for assembly in dataset_list:
+                if assembly['assembly'] in genomic_dict:
+                    split_indices.append(genomic_dict[assembly['assembly']])
+                else:
+                    raise ValueError(f"Assembly {assembly['assembly']} not found in genomic_dict. Please check the dataset.")
+            # Create the train/test splits based on the indices
+            for fold_idx in range(cfg.num_folds):
+                train_idx = [i for i, split in enumerate(split_indices) if split != fold_idx]
+                test_idx = [i for i, split in enumerate(split_indices) if split == fold_idx]
+                cv_splits.append((train_idx, test_idx))
+        else:
+            logger.info("Using random splits for training and testing.")
+            # Use StratifiedKFold to create the split indices
+            skf = StratifiedKFold(n_splits=cfg.num_folds, shuffle=True, random_state=cfg.seed)
+            for train_idx, test_idx in skf.split(X, y):
+                cv_splits.append((train_idx, test_idx))
+                
+
         # --- Train Model ---
         model = hydra.utils.instantiate(cfg.model)
 
         logger.info(f"Training {model.__class__.__name__} model...")
         summary_stats, best_classification_report, fold_results_df = fitmodel_nestedcv(
-            X, y, model, config=cfg, 
+            X, y, cv_splits, model, config=cfg, 
             use_sweeps=use_sweeps, 
             sweep_config=sweep_config,
             fixed_run_config=fixed_config

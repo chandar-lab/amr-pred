@@ -37,7 +37,7 @@ def get_parser():
     parser.add_argument(
         "--path-isolates",
         type=str,
-        default="isolates.tsv",
+        default="ncbi_raw/isolates.tsv",
         help="Path to the isolates file downloaded from https://www.ncbi.nlm.nih.gov/pathogens/isolates",   
     )
     parser.add_argument(

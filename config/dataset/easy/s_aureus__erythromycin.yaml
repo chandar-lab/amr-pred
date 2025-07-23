@@ -1,8 +1,8 @@
 # path to the fasta files
-path_dataroot: "/home/mila/n/naga-karthik.enamundram/scratch/amr_genomic_data/staphylococcus_aureus/"
+path_dataroot: ${path_assemblies_root}/staphylococcus_aureus/
 
 # path to the csv file
-path_csv: "/home/mila/n/naga-karthik.enamundram/genomicFMs/ncbi_resistance_phenotypes_asts/datasets_reinterpreted/staphylococcus_aureus/filtered"
+path_csv: ${path_datasets_reinterpreted}/staphylococcus_aureus/filtered
 
 # pathogen and antibiotic
 pathogen: "staphylococcus_aureus"
