@@ -218,6 +218,8 @@ def main():
         organism = row['Organism group']
 
         # check if the sample is resistant or susceptible
+        # NOTE: we do the reinterpretation for samples that are strictly > or < considering the double dilutions
+        # for samples with >= or == or <= we keep the original MIC value as they are typically at the breakpoint
         if row['Measurement sign'] == '>':
             df.at[index, 'MIC_revised'] = row['MIC (mg/L)'] * 2
             # NOTE: why * 2? because phenotypic tests are tested for double dilutions. 
