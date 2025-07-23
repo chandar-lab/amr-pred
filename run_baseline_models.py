@@ -203,7 +203,7 @@ def main(cfg: DictConfig):
         if cfg.use_genomic_splits == True:
             logger.info("Using phylogeny-based splits for training and testing.")
             # Get the dictionary for the split indices
-            genomic_dict = get_genomic_folds(
+            genomic_dict, _ = get_genomic_folds(
                 pathogen=cfg.dataset.pathogen, antibiotic=cfg.dataset.antibiotic,
                 path_dataroot=cfg.dataset.path_dataroot, path_csv=cfg.dataset.path_csv,
                 num_folds=cfg.num_folds, dist_method=cfg.split_method,

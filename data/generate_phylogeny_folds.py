@@ -79,14 +79,18 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
     - fold_assignments: dict, mapping of assembly names to fold numbers
     """
     fold_assignments_csv = os.path.join(path_dataroot, f"{pathogen}__{antibiotic}__{dist_method}__phylogeny_folds.csv")
+    dist_table_csv = os.path.join(path_dataroot, f"{pathogen}__{antibiotic}__{dist_method}__distance_table.csv")
     logger = logging.getLogger(__name__) # Ensures the messages sent to the logger have the function name
 
     # Return the fold assignments as a dict if the file already exists
-    if os.path.isfile(fold_assignments_csv) and not force_regenerate:
+    if os.path.isfile(fold_assignments_csv) and os.path.isfile(dist_table_csv) and not force_regenerate:
         logger.info(f"Fold assignments already exist at {fold_assignments_csv}, loading from file.")
         fold_assignments_df = pd.read_csv(fold_assignments_csv)
         fold_assignments = dict(zip(fold_assignments_df['assembly'], fold_assignments_df['fold']))
-        return fold_assignments
+
+        logger.info(f"Distance table already exists at {dist_table_csv}, loading from file.")
+        dist_table = pd.read_csv(dist_table_csv, index_col=0)
+        return fold_assignments, dist_table
 
     # Task 1: Generate files with list of assemblies for the pathogen
     path_root_fna = path_dataroot
@@ -118,33 +122,39 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
         all_pathogen_assemblies = [line.strip().split('/')[-2] for line in f.readlines() if line.strip()]
 
 
-
-
     # Task 2: Generate and save distance matrix for the assemblies using the desired distance metric
     full_pathogen_matrix = get_matrix(assemblies_txt, path_root_fna, method=dist_method, force_regenerate=force_regenerate)
     logger.info(f"Full pathogen distance matrix shape: {full_pathogen_matrix.shape}")
+
 
     # Task 3: determine which assemblies are relevant for the antibiotic
     # Load the data using the load_data function
     dataset_list = load_data(path_data_csv, path_root_fna)
 
     # Create a set of all assemblies from the dataset_list
-    dataset_assemblies = [entry['assembly'] for entry in dataset_list]
+    unordered_dataset_assemblies = [entry['assembly'] for entry in dataset_list]
 
     # Create a list of indices for the assemblies that are also in the dataset_list
-    relevant_indices = [i for i, assembly in enumerate(all_pathogen_assemblies) if assembly in dataset_assemblies]
+    relevant_indices = []
+    ordered_dataset_assemblies = []
+    for i, assembly in enumerate(all_pathogen_assemblies):
+        if assembly in unordered_dataset_assemblies:
+            relevant_indices.append(i)
+            ordered_dataset_assemblies.append(assembly)
     print(f"Number of relevant assemblies for {pathogen} and {antibiotic}: {len(relevant_indices)}")
 
     # Filter the matrix to only include the relevant assemblies
     specie_drug_dist_matrix = full_pathogen_matrix[np.ix_(relevant_indices, relevant_indices)]
     logger.info(f"Filtered distance matrix shape: {specie_drug_dist_matrix.shape}")
 
+    # Turn into a dataframe indexed by the assembly names on both axes
+    specie_drug_dist_df = pd.DataFrame(specie_drug_dist_matrix, index=ordered_dataset_assemblies, columns=ordered_dataset_assemblies)
+    # Save the specie-drug distance table to a CSV file
+    specie_drug_dist_matrix_csv = os.path.join(path_root_fna, f"{pathogen}__{antibiotic}__{dist_method}__distance_table.csv")
+    specie_drug_dist_df.to_csv(specie_drug_dist_matrix_csv)
+    logger.info(f"Saved distance matrix to {specie_drug_dist_matrix_csv}")
 
     # Task 4: Create folds based on the distance matrix, with a csv
-    # which maximizes genomic distance between the folds (hard case),
-    # the file will have a row for each assembly, and then the associated fold number.
-    # Print the number of susceptible, intermediate, and resistant isolates in each fold.
-
     ### Use the method described in Learning From Limited Data: "Towards Best Practice Techniques for Antimicrobial Resistance Prediction From Whole Genome Sequencing Data", 2021
 
     logger.info(f"Creating {num_folds} folds based on the distance matrix...")
@@ -165,30 +175,33 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
         # Find the assembly with the maximum minimum distance
         new_seed = np.argmax(min_distances)
         fold_seeds.append(new_seed)
-    
+      
     logger.info("Assigning assemblies to folds based on the selected seeds...")
     # Create a list to hold the fold assignments
     fold_assignments = {}
     assigned_indices = set()
-    fold_sizes = [0] * num_folds  # Used to logging, to ensure equal distribution of assemblies.
+    fold_sizes = [1] * num_folds  # Used to logging, to ensure equal distribution of assemblies.
+
+    # Begin by assigning the seeds to their respective folds
+    for i, seed in enumerate(fold_seeds):
+        fold_assignments[ordered_dataset_assemblies[seed]] = i
+        assigned_indices.add(seed)
+
     # Take turns assigning assemblies to folds, starting with the first seed
-    while len(assigned_indices) < len(dataset_assemblies):
-        for seed in fold_seeds:
-            # Find the assembly with the maximum distance to the current fold assignments
-            # Calculate the distances from the seed to all assemblies not yet assigned to a fold
-            distances = specie_drug_dist_matrix[seed, :]
-            unassigned_indices = [i for i in list(range(len(dataset_assemblies))) if i not in assigned_indices]
-            # Find the assembly with the minimum distance to the current seed
-            min_distance_index = np.argmin(distances[unassigned_indices])
-            # Assign this assembly to the current fold
-            fold_assignments[dataset_assemblies[unassigned_indices[min_distance_index]]] = len(fold_assignments) % num_folds
-            assigned_indices.add(unassigned_indices[min_distance_index])
-            fold_sizes[len(fold_assignments) % num_folds] += 1
-
-
-    # print("Fold assignments:")
-    # for assembly, fold in fold_assignments.items():
-    #     print(f"{assembly}: Fold {fold}")
+    curr_seed = 0
+    while len(assigned_indices) < len(ordered_dataset_assemblies):
+        # Find the assembly with the maximum distance to the current fold assignments
+        # Calculate the distances from the seed to all assemblies not yet assigned to a fold
+        distances = specie_drug_dist_matrix[seed, :]
+        unassigned_indices = [i for i in list(range(len(ordered_dataset_assemblies))) if i not in assigned_indices]
+        # Find the assembly with the minimum distance to the current seed
+        min_distance_index = np.argmin(distances[unassigned_indices])
+        # Assign this assembly to the current fold
+        fold_assignments[ordered_dataset_assemblies[unassigned_indices[min_distance_index]]] = len(fold_assignments) % num_folds
+        assigned_indices.add(unassigned_indices[min_distance_index])
+        fold_sizes[len(fold_assignments) % num_folds] += 1
+        # Move to the next seed
+        curr_seed = (curr_seed + 1) % num_folds
 
     # Print the size of each fold 
     logger.info(f"Fold sizes: {fold_sizes}")
@@ -201,7 +214,79 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
 
     # Return the fold assignments as a dict
     fold_assignments = dict(zip(fold_assignments_df['assembly'], fold_assignments_df['fold']))
-    return fold_assignments
+    return fold_assignments, specie_drug_dist_df
+
+def folds_stats(folds, dist_table):
+    """
+    Print the minimum, maximum, and average distance between assemblies in each fold.
+    parameters:
+    - dist_table: pd.DataFrame, distance table with assemblies as index and columns
+    - folds: dict, mapping of assembly names to fold numbers
+    """
+    fold_stats = {}
+    for fold in set(folds.values()):
+        # Get the assemblies in the current fold
+        fold_assemblies = [assembly for assembly, f in folds.items() if f == fold]
+        # Get all the assemblies in the other folds
+        other_assemblies = [assembly for assembly, f in folds.items() if f != fold]
+        # Get the distance matrix for the current fold
+        fold_distances = dist_table.loc[fold_assemblies, fold_assemblies].values
+        # Calculate the minimum, maximum, and average distance
+        min_distance = np.min(fold_distances)
+        max_distance = np.max(fold_distances)
+        avg_distance = np.mean(fold_distances)
+        fold_stats[fold] = {
+            'intra_min': min_distance,
+            'intra_max': max_distance,
+            'intra_avg': avg_distance
+        }
+        # Calculate the minimum, maximum and average distance to the other folds
+        other_distances = dist_table.loc[fold_assemblies, other_assemblies].values
+        if other_distances.size > 0:  # Check if there are any distances
+            min_distance_other = np.min(other_distances)
+            max_distance_other = np.max(other_distances)
+            avg_distance_other = np.mean(other_distances)
+            fold_stats[fold].update({
+                'inter_min': min_distance_other,
+                'inter_max': max_distance_other,
+                'inter_avg': avg_distance_other
+            })
+        else:
+            fold_stats[fold].update({
+                'inter_min': None,
+                'inter_max': None,
+                'inter_avg': None
+            })
+
+    # Create a matrix with minimum distances between each pair of folds
+    fold_distance_matrix = pd.DataFrame(index=fold_stats.keys(), columns=fold_stats.keys())
+    for fold1 in fold_stats.keys():
+        for fold2 in fold_stats.keys():
+            if fold1 == fold2:
+                fold_distance_matrix.loc[fold1, fold2] = 0.0
+            else:
+                # Get the assemblies in the current folds
+                fold1_assemblies = [assembly for assembly, f in folds.items() if f == fold1]
+                fold2_assemblies = [assembly for assembly, f in folds.items() if f == fold2]
+                # Get the distance matrix for the current folds
+                distances = dist_table.loc[fold1_assemblies, fold2_assemblies].values
+                if distances.size > 0:
+                    # Calculate the minimum distance between the two folds
+                    min_distance = np.min(distances)
+                    fold_distance_matrix.loc[fold1, fold2] = min_distance
+                else:
+                    fold_distance_matrix.loc[fold1, fold2] = None
+
+
+    # Print the statistics for each fold
+    print("Minimum, maximum, and average distances between assemblies in each fold:")
+    for fold, stats in fold_stats.items():
+        print(f"Fold {fold}: Min: {stats['intra_min']:.6f}, Max: {stats['intra_max']:.6f}, Avg: {stats['intra_avg']:.6f}")
+    print("Minimum, maximum, and average distances to the other folds:")
+    for fold, stats in fold_stats.items():
+        print(f"Fold {fold}: Min: {stats['inter_min']:.6f}, Max: {stats['inter_max']:.6f}, Avg: {stats['inter_avg']:.6f}")
+    print("\nMinimum distances between each pair of folds:")
+    print(fold_distance_matrix)
 
 
 
@@ -223,4 +308,7 @@ if __name__ == "__main__":
     )
 
     # Generate the genomic folds based on the provided arguments
-    get_genomic_folds(args.pathogen, args.antibiotic, args.path_dataroot, args.path_csv, args.folds, args.dist_method, args.force_regenerate)
+    folds, dist_table_df = get_genomic_folds(args.pathogen, args.antibiotic, args.path_dataroot, args.path_csv, args.folds, args.dist_method, args.force_regenerate)
+
+    # Print the stats for the folds
+    folds_stats(folds, dist_table_df)
