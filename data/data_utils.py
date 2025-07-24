@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 
 # global parameters
 FONTSIZE = 12
-MIN_SAMPLES_PER_CLASS = 50  # arbitrary number; used because this is what bMx does internally
 LABEL_MAPPING = {
     # NOTE: convention is to use 0 for susceptible and 1 for resistant
     "resistant": 1,
@@ -44,14 +43,7 @@ def load_data(path_data_csv, path_root_fna):
         dataset_list.append(temp_dict)
     
     return dataset_list
-
-# Borrowed from run_baseline_models.py
-LABEL_MAPPING = {
-    # NOTE: convention is to use 0 for susceptible and 1 for resistant
-    "resistant": 1,
-    "susceptible": 0
-}
-
+    
 
 def plot_antibiotic_counts(antibiotic_dict, organism, save_path):
     # This function plots barplots for each specie, showing the counts of resistant and susceptible genomes for each antibiotic
@@ -82,7 +74,7 @@ def plot_antibiotic_counts(antibiotic_dict, organism, save_path):
     plt.xlabel("Antibiotic", fontsize=FONTSIZE+3)
     plt.yticks(fontsize=FONTSIZE)
     plt.xticks(rotation=90, fontsize=FONTSIZE)
-    plt.title(f"Genome Counts for {organism} (Log Scale); Threshold: {MIN_SAMPLES_PER_CLASS} genomes per class")
+    plt.title(f"Genome Counts for {organism} (Log Scale)")
     plt.tight_layout()
 
     organism = organism.replace(" ", "_").lower()

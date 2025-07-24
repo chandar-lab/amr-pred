@@ -1,6 +1,8 @@
 """
 Script for preprocessing the NCBI ASTs dataset. The script does the following:
 1. Loads the NCBI ASTs dataset containing all species, phenotypic AST labels, and assemblies.
+    NOTE: the csv file is downloaded from https://www.ncbi.nlm.nih.gov/pathogens/asts browser by 
+    selecting the "Organism group", checking "Susceptible", "Resistant", and "Not defined" phenotypes,
     1.1 Filters the dataset with MIC values from CLSI breakpoints
 2. (optional) Generates barplots showing genome counts per species and antibiotic.
 3. Store the individual species-antibiotic dataset combination in a separate CSV file for training.
@@ -9,12 +11,11 @@ Script for preprocessing the NCBI ASTs dataset. The script does the following:
 import pandas as pd
 import numpy as np
 import os
+import logging
 from tqdm import tqdm
 import argparse
-from loguru import logger
 from data_utils import (plot_antibiotic_counts, plot_antibiotic_counts_per_organism, 
     get_drugs_for_organism_clsi, get_mic_breakpoints, clean_breakpoints_file)
-from data_utils import MIN_SAMPLES_PER_CLASS
 
 
 
@@ -85,10 +86,33 @@ def main():
 
     # get the organism name from the path_data
     organism = os.path.basename(os.path.dirname(args.path_data))
-    logger.info(f"Species: {organism.upper()}")
 
     # logging setup
-    logger.add(os.path.join(args.path_out, organism, 'filtered', "log.txt"), level="INFO", rotation="10 MB")
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)  # Set level for the logger itself
+
+    # Create formatter
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+    # Create stream handler (console)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.INFO)
+    stream_handler.setFormatter(formatter)
+    # Ensure log directory exists
+    log_dir = os.path.join(args.path_out, organism, "filtered")
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Create file handler
+    log_file = os.path.join(log_dir, "log.txt")    
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+
+    # Add both handlers to the logger
+    logger.addHandler(stream_handler)
+    logger.addHandler(file_handler)
+
+    logger.info(f"Species: {organism.upper()}")
 
     # load the data
     df = pd.read_csv(args.path_data, low_memory=False)
@@ -194,6 +218,8 @@ def main():
         organism = row['Organism group']
 
         # check if the sample is resistant or susceptible
+        # NOTE: we do the reinterpretation for samples that are strictly > or < considering the double dilutions
+        # for samples with >= or == or <= we keep the original MIC value as they are typically at the breakpoint
         if row['Measurement sign'] == '>':
             df.at[index, 'MIC_revised'] = row['MIC (mg/L)'] * 2
             # NOTE: why * 2? because phenotypic tests are tested for double dilutions. 
@@ -206,8 +232,6 @@ def main():
             
 
     drugs = sorted(df['Antibiotic'].unique().tolist())
-
-    logger.info(f"Minimum number of samples per class (R/S) to create a dataset set to: {MIN_SAMPLES_PER_CLASS}")
 
     organism_groups = [organism]
     dataset_counts = {}
@@ -255,45 +279,40 @@ def main():
 
             num_resistant = len(df_new[df_new['Phenotype_revised'] == 'resistant'])
             num_susceptible = len(df_new[df_new['Phenotype_revised'] == 'susceptible'])
-
-            if num_resistant < MIN_SAMPLES_PER_CLASS or num_susceptible < MIN_SAMPLES_PER_CLASS:
-                logger.info(f"Warning: Not enough samples for {drug}. R: {num_resistant}, S: {num_susceptible}. Not creating the dataset.")
-                continue
             
-            else:
-                # logger.info(f"Number of resistant samples for {drug}: {num_resistant}")
-                # logger.info(f"Number of susceptible samples for {drug}: {num_susceptible}")
-                num_resistant_after += num_resistant
-                num_susceptible_after += num_susceptible
-                num_resistant_before += len(df_new[df_new['Resistance phenotype'] == 'resistant'])
-                num_susceptible_before += len(df_new[df_new['Resistance phenotype'] == 'susceptible'])
+            # logger.info(f"Number of resistant samples for {drug}: {num_resistant}")
+            # logger.info(f"Number of susceptible samples for {drug}: {num_susceptible}")
+            num_resistant_after += num_resistant
+            num_susceptible_after += num_susceptible
+            num_resistant_before += len(df_new[df_new['Resistance phenotype'] == 'resistant'])
+            num_susceptible_before += len(df_new[df_new['Resistance phenotype'] == 'susceptible'])
 
-                # save the filtered dataframe
-                output_path = os.path.join(args.path_out, organism, 'filtered', f"{organism}__{drug}_SR_filt.csv")
-                if not os.path.exists(output_path):
-                    # create the directory for saving the filtered data if it doesn't exist
-                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                
-                # save the filtered dataframe to a CSV file
-                df_new.to_csv(output_path, index=False)
-                
-                # # keep only the relevant columns
-                # cols_to_keep = ['#BioSample', 'Organism group', 'Isolate', 'Assembly', 'Antibiotic',
-                #                     'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype', 'MIC_revised', 'Phenotype_revised']
-                # df_to_compare = df_new[cols_to_keep]
-                
-                # # get the samples where 'resistance phenotype' is not the same as 'Phenotype_revised'
-                # df_compare = df_to_compare[df_to_compare['Resistance phenotype'] != df_to_compare['Phenotype_revised']]
-                # logger.info(f"Samples with different resistance phenotype: {len(df_compare)}")
+            # save the filtered dataframe
+            output_path = os.path.join(args.path_out, organism, 'filtered', f"{organism}__{drug}_SR_filt.csv")
+            if not os.path.exists(output_path):
+                # create the directory for saving the filtered data if it doesn't exist
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # save the filtered dataframe to a CSV file
+            df_new.to_csv(output_path, index=False)
+            
+            # # keep only the relevant columns
+            # cols_to_keep = ['#BioSample', 'Organism group', 'Isolate', 'Assembly', 'Antibiotic',
+            #                     'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype', 'MIC_revised', 'Phenotype_revised']
+            # df_to_compare = df_new[cols_to_keep]
+            
+            # # get the samples where 'resistance phenotype' is not the same as 'Phenotype_revised'
+            # df_compare = df_to_compare[df_to_compare['Resistance phenotype'] != df_to_compare['Phenotype_revised']]
+            # logger.info(f"Samples with different resistance phenotype: {len(df_compare)}")
 
-                # create the dictionary
-                drug_count[drug] = {
-                    "resistant": num_resistant,
-                    "susceptible": num_susceptible
-                }
-        
-                # # get the number of antibiotics per organism (i.e. total number of "datasets")
-                # dataset_counts[organism] = dataset_counts.get(organism, 0) + 1
+            # create the dictionary
+            drug_count[drug] = {
+                "resistant": num_resistant,
+                "susceptible": num_susceptible
+            }
+    
+            # # get the number of antibiotics per organism (i.e. total number of "datasets")
+            # dataset_counts[organism] = dataset_counts.get(organism, 0) + 1
 
         # compute fractional change in resistant and susceptible samples
         logger.info(f"")
@@ -324,7 +343,7 @@ def main():
         
         
         if len(drug_count) == 0:
-            logger.info(f"No drugs with at least {MIN_SAMPLES_PER_CLASS} S/R genomes found for {organism}")
+            logger.info(f"No drugs with S/R genomes found for {organism}")
         else:
             if args.save_plots:
                 save_path = os.path.join(args.path_out, organism, "filtered", "plots_single_species")
