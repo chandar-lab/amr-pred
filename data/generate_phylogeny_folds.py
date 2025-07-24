@@ -3,15 +3,14 @@ python generate_phylogeny_folds.py --path-dataroot ../amr_genomic_data/pseudomon
 
 import os
 import argparse
-import glob
 import logging
 
 import pandas as pd
 import numpy as np
 from datetime import datetime
 
-from data.genomic_dst_utils import mash_distance_txt, ani_distance_txt, dashing_distance_txt
-from data.data_utils import load_data
+from genomic_dst_utils import mash_distance_txt, ani_distance_txt, dashing_distance_txt, get_assemblies_txt
+from data_utils import load_data
 
 
 def parse_args():
@@ -102,19 +101,7 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, num_folds=5
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
     
     # Generate the file with paths to all assemblies for the pathogen, if needed
-    assemblies_txt = os.path.join(path_root_fna, "all_assemblies.txt")
-    if (not os.path.isfile(os.path.join(assemblies_txt))) or force_regenerate:
-        logger.info(f"Generating list of assemblies for {pathogen}...")
-        # Get all assemblies from the path_root_fna folder, and put them in a list
-        subfolders = os.listdir(path_root_fna)
-        assembly_files = [glob.glob(os.path.join(path_root_fna, folder, "ncbi_dataset", "data", folder, "*.fna"))[0] for folder in subfolders if os.path.isdir(os.path.join(path_root_fna, folder))]
- 
-        # Save the list of assemblies to a file in the path_root_fna folder
-        with open(assemblies_txt, "w") as f:
-            for assembly in assembly_files:
-                f.write(f"{assembly}\n")
-    else:
-        logger.info(f"List of assemblies already exists at {assemblies_txt}, skipping regeneration.")
+    assemblies_txt = get_assemblies_txt(path_root_fna, force_regenerate=force_regenerate)
 
     # Make the assemblies list hold only the names of the assemblies, not the full paths
     with open(assemblies_txt, "r") as f:
@@ -285,7 +272,7 @@ def folds_stats(folds, dist_table):
     print("Minimum, maximum, and average distances to the other folds:")
     for fold, stats in fold_stats.items():
         print(f"Fold {fold}: Min: {stats['inter_min']:.6f}, Max: {stats['inter_max']:.6f}, Avg: {stats['inter_avg']:.6f}")
-    print("\nMinimum distances between each pair of folds:")
+    print("\nPairwise minimum distances between folds:")
     print(fold_distance_matrix)
 
 
@@ -308,7 +295,7 @@ if __name__ == "__main__":
     )
 
     # Generate the genomic folds based on the provided arguments
-    folds, dist_table_df = get_genomic_folds(args.pathogen, args.antibiotic, args.path_dataroot, args.path_csv, args.folds, args.dist_method, args.force_regenerate)
+    folds, dist_table_df = get_genomic_folds(args.pathogen, args.antibiotic, args.path_dataroot, os.path.join(args.path_csv, args.pathogen, "filtered"), args.folds, args.dist_method, args.force_regenerate)
 
     # Print the stats for the folds
     folds_stats(folds, dist_table_df)
