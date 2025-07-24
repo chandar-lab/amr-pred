@@ -1,8 +1,8 @@
 import subprocess
 import os
-import time
 import glob
-
+from pathlib import Path
+import logging
 
 import numpy as np
 from multiprocessing import Pool # Used for parallel processing of ani and mash distances
@@ -10,8 +10,9 @@ from tqdm import tqdm
 from pathlib import Path
 from pyani_plus.methods.anim import parse_delta # used to calculate ANI distance
 
-K = None # K-mer size for Mash and Dashing distance calculations
-SKETCH_SIZE = None # Size of sketch used for Mash and Dashing
+MASH_DEFAULT_K = 21
+DASHING_DEFAULT_K = 32
+DEFAULT_SKETCH_SIZE = 10
 
 def ani_distance_pair(fasta1, fasta2, verbose=False):
     '''Calculate the ANI distance between two FASTA files using the pyani tool.
@@ -36,41 +37,54 @@ def ani_distance_pair(fasta1, fasta2, verbose=False):
 
     return 1 - ani_distance[2]
 
-def mash_distance_pair(fasta1, fasta2, k=K, sketch_size=SKETCH_SIZE, verbose=False):
+def mash_distance_pair(fasta1, fasta2, k=MASH_DEFAULT_K, sketch_size=DEFAULT_SKETCH_SIZE):
     '''Calculate the Mash distance between two FASTA files using the mash tool.
     Returns the Mash distance as a float.
     Must first install mash, conda install -c bioconda mash'''
-    
-    # Load default values for k and sketch_size if not provided
-    if k == None:
-        k = 21 # Default k-mer size for Mash distance calculations
-    if sketch_size == None:
-        sketch_size = 2**10 # Default sketch size for Mash distance calculations
-    else:
-        # Convert sketch_size to the power of 2 to match Dashing's functionality
-        sketch_size = 2**sketch_size
+     # Check that the passed values are in the right range
+    if k < 1 or k > 32:
+        raise ValueError(f"k must be in the range [1, 32], got {k}")
+    if sketch_size < 5 or sketch_size > 63:
+        raise ValueError(f"sketch_size must be in the range [5, 63], got {sketch_size}")
+    # Convert sketch size to a power of 2 to match dashing's functionality
+    sketch_size = 2**sketch_size
 
+    # Generate the mash sketches so they can be reused
+    fasta1_sketch_name = os.path.join(Path(fasta1).parent, f"{Path(fasta1).stem}_size{sketch_size}_k{k}_sketch")
+    fasta2_sketch_name = os.path.join(Path(fasta2).parent, f"{Path(fasta2).stem}_size{sketch_size}_k{k}_sketch")
+    # Check if they already exist, if not, create them
+    if not os.path.exists(fasta1_sketch_name + ".msh"):
+        subprocess.run(["mash", "sketch", "-o", fasta1_sketch_name, "-s", str(sketch_size), "-k", str(k), fasta1], capture_output=True, text=True)
+    if not os.path.exists(fasta2_sketch_name + ".msh"):
+        subprocess.run(["mash", "sketch", "-o", fasta2_sketch_name, "-s", str(sketch_size), "-k", str(k), fasta2], capture_output=True, text=True)
 
-    # Go straight to the mash distance calculation without creating intermediate files
-    result = subprocess.run(["mash", "dist", fasta1, fasta2, "-k", str(k), "-s", str(sketch_size)], capture_output=True, text=True)
+    # Calculate the Mash distance using the sketches
+    result = subprocess.run(["mash", "dist", fasta1_sketch_name + ".msh", fasta2_sketch_name + ".msh"], capture_output=True, text=True)
     line = result.stdout.strip().split('\n')[0]
     fields = line.split('\t')
     distance = float(fields[2])  # Mash distance
     
     return distance
 
-def dashing_distance_pair(fasta1, fasta2, k=K, sketch_size=SKETCH_SIZE, verbose=False):
-    '''Calculate the Dashing distance between two FASTA files using the dashing2 tool.
+def dashing_distance_pair(fasta1, fasta2, k=DASHING_DEFAULT_K, sketch_size=DEFAULT_SKETCH_SIZE):
+    '''Calculate the Dashing distance between two FASTA files using the dashing tool.
     Returns the Dashing distance as a float.
-    Must first install dashing2, conda install -c bioconda dashing2'''
+    Must first install dashing, conda install -c bioconda dashing'''
+    if k < 1 or k > 32:
+        raise ValueError(f"k must be in the range [1, 32], got {k}")
+    if sketch_size < 5 or sketch_size > 63:
+        raise ValueError(f"sketch_size must be in the range [5, 63], got {sketch_size}")
+    
+    # Compute the dashing sketches
+    fasta1_sketch_name = f"{fasta1}.w.{k}.spacing.{sketch_size}.hll"
+    fasta2_sketch_name = f"{fasta2}.w.{k}.spacing.{sketch_size}.hll"
+    if not os.path.exists(fasta1_sketch_name):
+        subprocess.run(["dashing", "sketch", "-k", str(k), "-S", str(sketch_size), fasta1], capture_output=True, text=True)
+    if not os.path.exists(fasta2_sketch_name):
+        subprocess.run(["dashing", "sketch", "-k", str(k), "-S", str(sketch_size), fasta2], capture_output=True, text=True)
 
-    if k == None:
-        k = 32 # Default k-mer size for dashing distance calculations is 32
-    if sketch_size == None:
-        sketch_size = 13 # Our preferred sketch size for our task is 2^13
-
-    # Run dashing2 to calculate the distance
-    result = subprocess.run(["dashing", "dist", "--kmer-length", str(k), "-S", str(sketch_size), "--mash-dist", fasta1, fasta2], capture_output=True, text=True)
+    # Use dashing to estimate the distance
+    result = subprocess.run(["dashing", "dist", "--mash-dist", "--presketched", fasta1_sketch_name, fasta2_sketch_name], capture_output=True, text=True)
 
     # Parse the output to get the Dashing distance
     lines = result.stdout.strip().split('\n')
@@ -82,41 +96,46 @@ def dashing_distance_pair(fasta1, fasta2, k=K, sketch_size=SKETCH_SIZE, verbose=
     
     return distance
 
-def mash_distance_txt(txt, k=None, sketch_size=None, verbose=False):
-    '''Calculate the pairwise Mash distance between all pairs of sequences in the two assembly list .txt files.
+def mash_distance_txt(txt, k=MASH_DEFAULT_K, sketch_size=DEFAULT_SKETCH_SIZE):
+    '''Calculate the pairwise Mash distance between all pairs of sequences listed in the provided .txt file.
     returns a matrix of Mash distances, where the i-th row and j-th column is the Mash distance between the i-th sequence in txt and the j-th sequence in txt.'''
-    # Call mash_distance_pair using subprocess
-    global K, SKETCH_SIZE
-    if k != None:
-        K = k
-    if sketch_size != None:
-        SKETCH_SIZE = sketch_size
+    return _txt_based_distance(txt, _mash_distance_pair_wrapper, k, sketch_size)
 
-    return _txt_based_distance(txt, _mash_distance_pair_wrapper, verbose=verbose)
+def ani_distance_txt(txt):
+    '''Calculate the pairwise ANI distance between all pairs of sequences listed in the passed .txt file.
+    returns a matrix of ANI distances, where the i-th row and j-th column is the ANI distance between the i-th sequence in txt and the j-th sequence in txt.'''
+    return _txt_based_distance(txt, _ani_distance_pair_wrapper)
 
-def ani_distance_txt(txt, verbose=False):
-    '''Calculate the pairwise ANI distance between all pairs of sequences in the two assembly list .txt files.
-    returns a matrix of ANI distances, where the i-th row and j-th column is the ANI distance between the i-th sequence in txt1 and the j-th sequence in txt2.'''
-    # Call ani_distance_pair using subprocess
-    return _txt_based_distance(txt, _ani_distance_pair_wrapper, verbose=verbose)
+def dashing_distance_txt(txt,k=DASHING_DEFAULT_K, sketch_size=DEFAULT_SKETCH_SIZE):
+    '''Calculate the pairwise Dashing distance between all pairs of sequences listed in the passed .txt file.
+    returns a matrix of Dashing distances, where the i-th row and j-th column is the Dashing distance between the i-th sequence in txt and the j-th sequence in txt.'''
+    return _txt_based_distance(txt, _dashing_distance_pair_wrapper, k, sketch_size)
 
-def dashing_distance_txt(txt,k=None, sketch_size=None, verbose=False):
-    '''Calculate the pairwise Dashing distance between all pairs of sequences in the two assembly list .txt files.
-    returns a matrix of Dashing distances, where the i-th row and j-th column is the Dashing distance between the i-th sequence in txt1 and the j-th sequence in txt2.'''
-    # Call dashing_distance_pair using subprocess
-    global K, SKETCH_SIZE
-    if k != None:
-        K = k
-    if sketch_size != None:
-        SKETCH_SIZE = sketch_size
+def get_assemblies_txt(assemblies_dir, force_regenerate=False):
+    '''Get a .txt file containing the paths to all assemblies in the provided directory.
+    The .txt file will be created if it does not exist.'''
+    # Assemblies_dir is analogous to root_path_fna in the original code
+    assemblies_txt = os.path.join(assemblies_dir, "all_assemblies.txt")
+    if (not os.path.isfile(os.path.join(assemblies_txt))) or force_regenerate:
+        logging.info(f"Generating list of assemblies at {assemblies_txt}...")
+        # Get all assemblies from the assemblies_dir folder, and put them in a list
+        subfolders = os.listdir(assemblies_dir)
+        assembly_files = [glob.glob(os.path.join(assemblies_dir, folder, "ncbi_dataset", "data", folder, "*.fna"))[0] for folder in subfolders if os.path.isdir(os.path.join(assemblies_dir, folder))]
 
-    return _txt_based_distance(txt, _dashing_distance_pair_wrapper, verbose=verbose)
+        # Save the list of assemblies to a file in the assemblies_dir folder
+        with open(assemblies_txt, "w") as f:
+            for assembly in assembly_files:
+                f.write(f"{assembly}\n")
+    else:
+        logging.info(f"List of assemblies already exists at {assemblies_txt}, skipping regeneration.")
+
+    return assemblies_txt
 
 
 def _mash_distance_pair_wrapper(args):
     '''Wrapper function for mash_distance_pair to be used with multiprocessing.'''
-    fasta1, fasta2 = args
-    return mash_distance_pair(fasta1, fasta2)
+    fasta1, fasta2, k, sketch_size = args
+    return mash_distance_pair(fasta1, fasta2, k=k, sketch_size=sketch_size)
 
 def _ani_distance_pair_wrapper(args):
     '''Wrapper function for ani_distance_pair to be used with multiprocessing.'''
@@ -125,10 +144,10 @@ def _ani_distance_pair_wrapper(args):
 
 def _dashing_distance_pair_wrapper(args):
     '''Wrapper function for dashing_distance_pair to be used with multiprocessing.'''
-    fasta1, fasta2 = args
-    return dashing_distance_pair(fasta1, fasta2)
+    fasta1, fasta2, k, sketch_size = args
+    return dashing_distance_pair(fasta1, fasta2, k=k, sketch_size=sketch_size)
 
-def _txt_based_distance(txt1, dist_func, verbose=False):
+def _txt_based_distance(txt1, dist_func, k, sketch_size):
     '''Calculate the pairwise Mash distance between all pairs of sequences in the provided text file.
     returns a matrix of Mash distances, where the i-th row and j-th column is the Mash distance between the i-th sequence and the j-th sequence in txt.'''
 
@@ -152,7 +171,7 @@ def _txt_based_distance(txt1, dist_func, verbose=False):
 
     # Calculate the Mash distance for each pair of sequences
     with Pool() as pool:
-        results = list(tqdm(pool.imap(dist_func, [(assembly1, assembly2) for _, _, assembly1, assembly2 in pairs]), total=len(pairs)))
+        results = list(tqdm(pool.imap(dist_func, [(assembly1, assembly2, k, sketch_size) for _, _, assembly1, assembly2 in pairs]), total=len(pairs)))
     
 
     # Initialize the distance matrix
@@ -171,23 +190,21 @@ def _txt_based_distance(txt1, dist_func, verbose=False):
 if __name__ == "__main__":
     # Example usage
     path_root_fna = "/home/mila/a/aselstya/scratch/amr_genomic_data/acinetobacter_baumannii/"
-    baumannii1_name = "GCA_000586635.1"
+    baumannii1_name = "GCA_001441355.1"
     baumannii1 = glob.glob(os.path.join(path_root_fna, baumannii1_name, "ncbi_dataset", "data", baumannii1_name, "*.fna"))[0]
     baumannii2 = "/home/mila/a/aselstya/scratch/amr_genomic_data/acinetobacter_baumannii/GCA_000586655.1/ncbi_dataset/data/GCA_000586655.1/GCA_000586655.1_MRSN58_genomic.fna"
     aeruginosa1 = "/home/mila/a/aselstya/scratch/amr_genomic_data/pseudomonas_aeruginosa/GCA_000710625.1/ncbi_dataset/data/GCA_000710625.1/GCA_000710625.1_MRSN18971scaf_genomic.fna"
     all_assemblies_txt = "/home/mila/a/aselstya/scratch/amr_genomic_data/pseudomonas_aeruginosa/10_assemblies.txt"
 
-    print("Mash distance between baumannii and aeruginosa")
-    mash_dist = mash_distance_pair(baumannii2, aeruginosa1, sketch_size=20000000)
-    print(f"{mash_dist}")
+    print("ANI distance between the two Acinetobacter baumannii assemblies:")
+    print(ani_distance_pair(baumannii1, baumannii2))
 
-    print("Dashing distance between baumannii and aeruginosa")
-    dashing_dist = dashing_distance_pair(baumannii2, aeruginosa1, sketch_size=21)
-    print(f"{dashing_dist}")
+    print("Mash distance between the two acinetobacter baumannii assemblies with sketch size 2^10:")
+    print(mash_distance_pair(baumannii1, baumannii2, sketch_size=10))
 
-    print("ANI distance between baumannii and aeruginosa")
-    ani_dist = ani_distance_pair(baumannii2, aeruginosa1)
-    print(f"{ani_dist}")
+    print("Dashing distance between the two acinetobacter baumannii assemblies with sketch size 10:")
+    print(dashing_distance_pair(baumannii1, baumannii2, sketch_size=10))
+
 
     # start_time = time.time()
     # print("ANI distance between the two Acinetobacter baumannii assemblies:")
