@@ -12,7 +12,62 @@ from pyani_plus.methods.anim import parse_delta # used to calculate ANI distance
 
 MASH_DEFAULT_K = 21
 DASHING_DEFAULT_K = 32
-DEFAULT_SKETCH_SIZE = 10
+DEFAULT_SKETCH_SIZE = 10    # 2^10 = 1024
+
+
+def get_assemblies_txt(assemblies_dir, force_regenerate=False):
+    '''Get a .txt file containing the paths to all assemblies in the provided directory.
+    The .txt file will be created if it does not exist.'''
+    # Assemblies_dir is analogous to root_path_fna in the original code
+    assemblies_txt = os.path.join(assemblies_dir, "all_assemblies.txt")
+    if (not os.path.isfile(os.path.join(assemblies_txt))) or force_regenerate:
+        logging.info(f"Generating list of assemblies at {assemblies_txt}...")
+        # Get all assemblies from the assemblies_dir folder, and put them in a list
+        assembly_files = glob.glob(os.path.join(assemblies_dir, "**", "ncbi_dataset", "data", "**", "*.fna"), recursive=True)
+
+        # Save the list of assemblies to a file in the assemblies_dir folder
+        with open(assemblies_txt, "w") as f:
+            for assembly in assembly_files:
+                f.write(f"{assembly}\n")
+    else:
+        logging.info(f"List of assemblies already exists at {assemblies_txt}, skipping regeneration.")
+
+    return assemblies_txt
+
+
+def _txt_based_distance(txt1, dist_func, k, sketch_size):
+    '''Calculate the pairwise distance between all pairs of sequences in the provided text file.
+    returns a matrix of distances, where the i-th row and j-th column is the distance between the i-th sequence and the j-th sequence in txt.'''
+
+    # Read the sequences from the .txt files
+    with open(txt1, 'r') as f:
+        sequences1 = [line.strip() for line in f.readlines()]
+
+    # Validate all files exist upfront
+    missing_files = [seq for seq in sequences1 if not os.path.exists(seq)]
+    if missing_files:
+        raise FileNotFoundError(f"Assembly files do not exist: {missing_files[:5]}...")
+
+    n = len(sequences1)
+    
+    # Use numpy to generate upper triangle indices more efficiently
+    i_indices, j_indices = np.triu_indices(n, k=1)  # k=1 excludes diagonal
+    pairs = [(i, j, sequences1[i], sequences1[j]) for i, j in zip(i_indices, j_indices)]
+    # print(f"Generated {len(pairs)} pairs, now calculating distances...")
+    
+    # Calculate distances in parallel
+    with Pool() as pool:
+        results = list(tqdm(pool.imap(dist_func, [(assembly1, assembly2, k, sketch_size) for _, _, assembly1, assembly2 in pairs]), total=len(pairs)))
+    
+    # Initialize the distance matrix
+    distance_matrix = np.zeros((n, n))
+    
+    # Vectorized assignment using numpy indexing
+    distance_matrix[i_indices, j_indices] = results
+    distance_matrix[j_indices, i_indices] = results  # Make symmetric
+
+    return distance_matrix
+
 
 def ani_distance_pair(fasta1, fasta2, verbose=False):
     '''Calculate the ANI distance between two FASTA files using the pyani tool.
@@ -96,42 +151,6 @@ def dashing_distance_pair(fasta1, fasta2, k=DASHING_DEFAULT_K, sketch_size=DEFAU
     
     return distance
 
-def mash_distance_txt(txt, k=MASH_DEFAULT_K, sketch_size=DEFAULT_SKETCH_SIZE):
-    '''Calculate the pairwise Mash distance between all pairs of sequences listed in the provided .txt file.
-    returns a matrix of Mash distances, where the i-th row and j-th column is the Mash distance between the i-th sequence in txt and the j-th sequence in txt.'''
-    return _txt_based_distance(txt, _mash_distance_pair_wrapper, k, sketch_size)
-
-def ani_distance_txt(txt):
-    '''Calculate the pairwise ANI distance between all pairs of sequences listed in the passed .txt file.
-    returns a matrix of ANI distances, where the i-th row and j-th column is the ANI distance between the i-th sequence in txt and the j-th sequence in txt.'''
-    return _txt_based_distance(txt, _ani_distance_pair_wrapper)
-
-def dashing_distance_txt(txt,k=DASHING_DEFAULT_K, sketch_size=DEFAULT_SKETCH_SIZE):
-    '''Calculate the pairwise Dashing distance between all pairs of sequences listed in the passed .txt file.
-    returns a matrix of Dashing distances, where the i-th row and j-th column is the Dashing distance between the i-th sequence in txt and the j-th sequence in txt.'''
-    return _txt_based_distance(txt, _dashing_distance_pair_wrapper, k, sketch_size)
-
-def get_assemblies_txt(assemblies_dir, force_regenerate=False):
-    '''Get a .txt file containing the paths to all assemblies in the provided directory.
-    The .txt file will be created if it does not exist.'''
-    # Assemblies_dir is analogous to root_path_fna in the original code
-    assemblies_txt = os.path.join(assemblies_dir, "all_assemblies.txt")
-    if (not os.path.isfile(os.path.join(assemblies_txt))) or force_regenerate:
-        logging.info(f"Generating list of assemblies at {assemblies_txt}...")
-        # Get all assemblies from the assemblies_dir folder, and put them in a list
-        subfolders = os.listdir(assemblies_dir)
-        assembly_files = [glob.glob(os.path.join(assemblies_dir, folder, "ncbi_dataset", "data", folder, "*.fna"))[0] for folder in subfolders if os.path.isdir(os.path.join(assemblies_dir, folder))]
-
-        # Save the list of assemblies to a file in the assemblies_dir folder
-        with open(assemblies_txt, "w") as f:
-            for assembly in assembly_files:
-                f.write(f"{assembly}\n")
-    else:
-        logging.info(f"List of assemblies already exists at {assemblies_txt}, skipping regeneration.")
-
-    return assemblies_txt
-
-
 def _mash_distance_pair_wrapper(args):
     '''Wrapper function for mash_distance_pair to be used with multiprocessing.'''
     fasta1, fasta2, k, sketch_size = args
@@ -147,43 +166,20 @@ def _dashing_distance_pair_wrapper(args):
     fasta1, fasta2, k, sketch_size = args
     return dashing_distance_pair(fasta1, fasta2, k=k, sketch_size=sketch_size)
 
-def _txt_based_distance(txt1, dist_func, k, sketch_size):
-    '''Calculate the pairwise Mash distance between all pairs of sequences in the provided text file.
-    returns a matrix of Mash distances, where the i-th row and j-th column is the Mash distance between the i-th sequence and the j-th sequence in txt.'''
+def mash_distance_txt(txt, k=MASH_DEFAULT_K, sketch_size=DEFAULT_SKETCH_SIZE):
+    '''Calculate the pairwise Mash distance between all pairs of sequences listed in the provided .txt file.
+    returns a matrix of Mash distances, where the i-th row and j-th column is the Mash distance between the i-th sequence in txt and the j-th sequence in txt.'''
+    return _txt_based_distance(txt, _mash_distance_pair_wrapper, k, sketch_size)
 
-    # Read the sequences from the .txt files
-    with open(txt1, 'r') as f:
-        sequences1 = f.readlines()
+def ani_distance_txt(txt):
+    '''Calculate the pairwise ANI distance between all pairs of sequences listed in the passed .txt file.
+    returns a matrix of ANI distances, where the i-th row and j-th column is the ANI distance between the i-th sequence in txt and the j-th sequence in txt.'''
+    return _txt_based_distance(txt, _ani_distance_pair_wrapper)
 
-    # Create a list of all the pairs that need to be compared
-    pairs = []
-    for assembly1_idx in range(len(sequences1)):
-        for assembly2_idx in range(len(sequences1)):
-            if assembly2_idx <= assembly1_idx: # Skip the diagonal and lower triangle of the matrix.
-                continue
-            assembly1 = sequences1[assembly1_idx].strip()
-            assembly2 = sequences1[assembly2_idx].strip()
-            if not os.path.exists(assembly1):
-                raise FileNotFoundError(f"Assembly file {assembly1} does not exist.")
-            if not os.path.exists(assembly2):
-                raise FileNotFoundError(f"Assembly file {assembly2} does not exist.")
-            pairs.append((assembly1_idx, assembly2_idx, assembly1, assembly2))
-
-    # Calculate the Mash distance for each pair of sequences
-    with Pool() as pool:
-        results = list(tqdm(pool.imap(dist_func, [(assembly1, assembly2, k, sketch_size) for _, _, assembly1, assembly2 in pairs]), total=len(pairs)))
-    
-
-    # Initialize the distance matrix
-    distance_matrix = np.zeros((len(sequences1), len(sequences1)))
-    # Place the results in the distance matrix
-    for (i, j, _, _) in pairs:
-        value = results.pop(0)
-        distance_matrix[i, j] = value
-        distance_matrix[j, i] = value # Symmetric matrix because the distance is the same in both directions
-
-    return distance_matrix
-
+def dashing_distance_txt(txt,k=DASHING_DEFAULT_K, sketch_size=DEFAULT_SKETCH_SIZE):
+    '''Calculate the pairwise Dashing distance between all pairs of sequences listed in the passed .txt file.
+    returns a matrix of Dashing distances, where the i-th row and j-th column is the Dashing distance between the i-th sequence in txt and the j-th sequence in txt.'''
+    return _txt_based_distance(txt, _dashing_distance_pair_wrapper, k, sketch_size)
 
 
 
