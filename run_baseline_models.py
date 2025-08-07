@@ -67,6 +67,8 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             "k": fixed_run_config['k'], "feat_mode": fixed_run_config['feat_mode'],
             "max_features": fixed_run_config['max_features'],
             "seed": fixed_run_config['seed'], 
+            "split_method": fixed_run_config['split_method'],
+            "clustering": fixed_run_config['clustering'],
             "fold": fold_idx,
             "balanced_accuracy": score,
             "f1_macro": f1_macro,
@@ -115,6 +117,7 @@ def main(cfg: DictConfig):
     path_data_csv = cfg.dataset.path_csv
     pathogen = cfg.dataset.pathogen
     antibiotic = cfg.dataset.antibiotic
+    split = "phylo" if cfg.use_genomic_splits else "random"
 
     dataset = f"{pathogen}__{antibiotic}_SR_filt.csv"
     path_data_csv = os.path.join(cfg.dataset.path_csv, dataset)
@@ -128,7 +131,7 @@ def main(cfg: DictConfig):
     max_features = cfg.matrix.max_features
 
     patho_short = f"{pathogen.split('_')[0][0]}_{pathogen.split('_')[1]}"
-    fname = f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_{(max_features//1000)}K"
+    fname = f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__split_{split}__feat_{(max_features//1000)}K"
 
     logger.info(f"Training on {pathogen} for {antibiotic} using k-mers of length {k} ...")
 
@@ -149,7 +152,7 @@ def main(cfg: DictConfig):
         batch_size=256,                                         # Smaller batches for memory efficiency
         use_canonical=True,
         use_sparse=cfg.dataset.use_sparse,                            # Use sparse matrix for k-mer features
-        path_full_matrix=os.path.join(path_species, "feature_matrices", f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_5M.npz"),
+        path_full_matrix=os.path.join(path_species, "feature_matrices", f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_10M.npz"),
         path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.pkl"),
     )
     
@@ -188,25 +191,28 @@ def main(cfg: DictConfig):
             "pathogen": cfg.dataset.pathogen, "antibiotic": cfg.dataset.antibiotic,
             "pathogen_short": patho_short, "k": cfg.matrix.k,
             "feat_mode": cfg.matrix.feat_mode, "max_features": f"{cfg.matrix.max_features//1000}K",
-            "use_sparse": cfg.dataset.use_sparse, "seed": cfg.seed,
+            "use_sparse": cfg.dataset.use_sparse, "seed": cfg.seed, 
+            "split_method": split, "clustering": cfg.clustering_method,
         }
         
         sweep_config = None
         if use_sweeps:
             sweep_config = OmegaConf.to_container(cfg.model.sweep, resolve=True)
-            sweep_name = f"SWEEP__{patho_short}__{cfg.dataset.antibiotic}"
+            sweep_name = f"SWEEP__{cfg.model.name}__{patho_short}__{antibiotic}__k_{k}__{split}"
             sweep_config['name'] = sweep_name
 
         
         # --- Setup train/test splits ---
         cv_splits = []
         if cfg.use_genomic_splits == True:
-            logger.info("Using phylogeny-based splits for training and testing.")
+            logger.info(f"Using phylogeny-based splits for training and testing with {cfg.clustering_method} folds.")
             # Get the dictionary for the split indices
-            genomic_dict, _ = get_genomic_folds(
+            genomic_dict, _ = get_genomic_folds(logger=logger,
                 pathogen=cfg.dataset.pathogen, antibiotic=cfg.dataset.antibiotic,
                 path_dataroot=cfg.dataset.path_dataroot, path_csv=cfg.dataset.path_csv,
-                num_folds=cfg.num_folds, dist_method=cfg.split_method,
+                path_out=os.path.join(path_species, "phylogeny"),
+                num_folds=cfg.num_folds, dist_method=cfg.split_method, 
+                clustering_method=cfg.clustering_method,
             )
             # Use the dict to determine the split indices
             split_indices = []
@@ -252,7 +258,7 @@ def main(cfg: DictConfig):
 
             # Save the results to a CSV file
             save_fname = f"results_{cfg.model.name}__{fname}"
-            path_out = os.path.join(output_dir, save_fname)
+            path_out = os.path.join(path_species, "results", save_fname)
             logger.info(f"Results saved to {path_out} ...")
             # results_df = pd.DataFrame(results)
             fold_results_df.to_csv(f"{path_out}.csv", index=False)
