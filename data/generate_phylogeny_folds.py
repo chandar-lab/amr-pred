@@ -2,6 +2,7 @@
 python generate_phylogeny_folds.py --path-dataroot ../amr_genomic_data/pseudomonas_aeruginosa --path-csv ./datasets --pathogen pseudomonas_aeruginosa --antibiotic cefepime'''
 
 import os
+import sys
 import argparse
 import logging
 import time
@@ -9,9 +10,13 @@ import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from collections import defaultdict
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from scipy.spatial.distance import squareform
 
-from genomic_dst_utils import mash_distance_txt, ani_distance_txt, dashing_distance_txt, get_assemblies_txt
-from data_utils import load_data
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from data.genomic_dst_utils import mash_distance_txt, ani_distance_txt, dashing_distance_txt, get_assemblies_txt
+from data.data_utils import load_data, get_folds_stats
 
 
 def parse_args():
@@ -25,12 +30,15 @@ def parse_args():
     parser.add_argument("--pathogen", type=str, help="Name of the pathogen of interest")
     parser.add_argument("--antibiotic", type=str, help="Name of the antibiotic of interest")
     parser.add_argument("--folds", type=int, default=5, help="Number of folds to create")
-    parser.add_argument("--dist_method", type=str, default='dashing', choices=['mash', 'ani', 'dashing'], help="Method to use for distance calculation: 'mash', 'ani', or 'dashing'. Default is 'dashing'.")
+    parser.add_argument("--dist_method", type=str, default='dashing', choices=['mash', 'ani', 'dashing'], 
+                        help="Method to use for distance calculation: 'mash', 'ani', or 'dashing'. Default is 'dashing'.")
+    parser.add_argument("--clustering", type=str, default='unordered', choices=['unordered', 'hierarchical'], 
+                        help="Method to use for splitting the data into folds: 'unordered' or 'hierarchical'. Default is 'unordered'.")
     parser.add_argument("--force_regenerate", action='store_true', help="Force regeneration of the assemblies list and distance matrix, even if they already exist")
     return parser.parse_args()
 
 
-def get_matrix(assemblies_txt, path_out, method='dashing', force_regenerate=False):
+def get_matrix(assemblies_txt, method='dashing', force_regenerate=False):
     # Map the three methods to their respective functions
     method_map = {
         'mash': mash_distance_txt,
@@ -60,8 +68,133 @@ def get_matrix(assemblies_txt, path_out, method='dashing', force_regenerate=Fals
     
     return dist_matrix
 
+def generate_folds(logger, path_fold_assignments_csv, assemblies, specie_drug_dist_matrix, clustering, num_folds=5):
 
-def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, path_out, num_folds=5, dist_method='dashing', force_regenerate=False):
+    fold_assignments = {}
+
+    if clustering == 'unordered':
+        logger.info(f"Creating {num_folds} folds based on the distance matrix...")
+        # Begin by selecting seeds, equal to the number of folds, which act as the centroids of the folds.
+
+        fold_seeds = [] # List of indices of the assemblies that will be used as seeds for the folds
+        # Begin by selecting the pair of seeds with the maximum distance between them
+        # This can be done by finding the single biggest entry in the matrix
+        index = np.argmax(specie_drug_dist_matrix)
+        row, col = np.unravel_index(index, specie_drug_dist_matrix.shape)
+        fold_seeds.append(row) 
+        fold_seeds.append(col)
+        
+        # Now additional seeds can be selected by iteratively finding the assembly with the largest minimum distance to an existing seed
+        while len(fold_seeds) < num_folds:
+            # Calculate the minimum distance to an existing seed for each assembly
+            min_distances = np.min(specie_drug_dist_matrix[:, fold_seeds], axis=1)
+            # Find the assembly with the maximum minimum distance
+            new_seed = np.argmax(min_distances)
+            fold_seeds.append(new_seed)
+        
+        logger.info("Assigning assemblies to folds based on the selected seeds...")
+        # Create a list to hold the fold assignments
+        assigned_indices = set()
+        fold_sizes = [1] * num_folds  # Used to logging, to ensure equal distribution of assemblies.
+
+        # Begin by assigning the seeds to their respective folds
+        for i, seed in enumerate(fold_seeds):
+            fold_assignments[assemblies[seed]] = i
+            assigned_indices.add(seed)
+
+        # Take turns assigning assemblies to folds, starting with the first seed
+        curr_seed = 0
+        while len(assigned_indices) < len(assemblies):
+            # Find the assembly with the maximum distance to the current fold assignments
+            # Calculate the distances from the seed to all assemblies not yet assigned to a fold
+            distances = specie_drug_dist_matrix[seed, :]
+            unassigned_indices = [i for i in list(range(len(assemblies))) if i not in assigned_indices]
+            # Find the assembly with the minimum distance to the current seed
+            min_distance_index = np.argmin(distances[unassigned_indices])
+            # Assign this assembly to the current fold
+            fold_assignments[assemblies[unassigned_indices[min_distance_index]]] = len(fold_assignments) % num_folds
+            assigned_indices.add(unassigned_indices[min_distance_index])
+            fold_sizes[len(fold_assignments) % num_folds] += 1
+            # Move to the next seed
+            curr_seed = (curr_seed + 1) % num_folds
+
+    elif clustering == 'hierarchical':
+        # --- Step 1: Hierarchical Clustering --- 
+        # 1. Convert the square distance matrix to the condensed format
+        # The linkage function requires a 1D array representing the upper triangle of the matrix.
+        condensed_dist_mat = squareform(specie_drug_dist_matrix)
+        print(f"Condensed Distance Matrix Shape: {condensed_dist_mat.shape}")
+
+        # 2. Perform hierarchical clustering (e.g., using UPGMA which is 'average' linkage)
+        # UPGMA is often used with genomic distance data.
+        Z = linkage(condensed_dist_mat, method='ward', metric='jaccard')
+        # print(f"Z shape: {Z.shape}")
+
+        # --- Step 2: Form Granular Flat Clusters ---
+        # Create more clusters than folds to allow for flexible, balanced grouping.
+        # A good rule of thumb is 4-5 times the number of folds.
+        num_intermediate_clusters = num_folds * 5  # Adjust this multiplier as needed for your dataset.
+        min_diff_between_folds = 5  # Minimum size difference between folds to consider them balanced.
+        
+        while True:
+            print(f"Attempting to create {num_intermediate_clusters} intermediate clusters...")    
+            flat_clusters = fcluster(Z, num_intermediate_clusters, criterion='maxclust')
+            # print(f"Number of flat clusters formed: {len(set(flat_clusters))}")
+            # print(f"Flat clusters: {flat_clusters}")
+
+            # --- Step 3: Group Sample Indices by Cluster ---
+            # Create a dictionary where keys are cluster IDs and values are lists of sample indices.
+            cluster_groups = defaultdict(list)
+            for i, cluster_id in enumerate(flat_clusters):
+                cluster_groups[cluster_id].append(i)
+
+            # --- Step 4: Distribute Clusters into Folds ---
+            # Assign entire clusters to folds to keep related samples together.
+            # This loop assigns each cluster to the fold that is currently the smallest.
+            folds = [[] for _ in range(num_folds)]
+            # Sort clusters by size (largest first) to improve balance.
+            sorted_clusters = sorted(cluster_groups.values(), key=len, reverse=True)
+
+            for cluster in sorted_clusters:
+                # Find the fold with the fewest samples.
+                smallest_fold = min(folds, key=len)
+                # Add all samples from the current cluster to that fold.
+                smallest_fold.extend(cluster)
+
+            # --- Verification ---
+            fold_sizes = [len(fold) for fold in folds]
+            print(f"Sizes of folds: {fold_sizes}")
+            # Check if the folds are balanced enough
+            if max(fold_sizes) - min(fold_sizes) < min_diff_between_folds:
+                print("Folds are balanced enough, stopping the clustering process.")
+                break
+            else:
+                print("Folds are not balanced enough, continuing to form clusters.")
+                num_intermediate_clusters += 5
+
+        # --- Step 5: Populate fold_assignments dictionary ---
+        # Convert the folds list (containing indices) to the fold_assignments dict (assembly names to fold numbers)
+        for fold_idx, fold_indices in enumerate(folds):
+            for assembly_idx in fold_indices:
+                fold_assignments[assemblies[assembly_idx]] = fold_idx
+
+    # Print the size of each fold 
+    logger.info(f"Clustering method: {clustering} \t Fold sizes: {fold_sizes}")
+
+    # Save the fold assignments to a CSV file
+    fold_assignments_df = pd.DataFrame(list(fold_assignments.items()), columns=['assembly', 'fold'])
+    # Save to csv in the path_root_fna folder
+    fold_assignments_df.to_csv(path_fold_assignments_csv, index=False)
+    logger.info(f"Fold assignments saved to {path_fold_assignments_csv}")
+
+    # Return the fold assignments as a dict
+    fold_assignments = dict(zip(fold_assignments_df['assembly'], fold_assignments_df['fold']))
+    
+    return fold_assignments
+
+
+def get_genomic_folds(logger, pathogen, antibiotic, path_dataroot, path_csv, path_out, num_folds=5, 
+                      dist_method='dashing', clustering_method='unordered', force_regenerate=False):
     """
     Generate genomic distance folds for a given pathogen and antibiotic.
     parameters:
@@ -75,14 +208,14 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, path_out, n
     returns:
     - fold_assignments: dict, mapping of assembly names to fold numbers
     """
-    fold_assignments_csv = os.path.join(path_out, f"{pathogen}__{antibiotic}__{dist_method}__phylogeny_folds.csv")
+    path_fold_assignments_csv = os.path.join(
+        path_out, f"{pathogen}__{antibiotic}__{dist_method}__phyloFolds_{clustering_method}.csv")
     dist_table_csv = os.path.join(path_out, f"{pathogen}__{antibiotic}__{dist_method}__distMat.csv")
-    logger = logging.getLogger(__name__) # Ensures the messages sent to the logger have the function name
 
     # Return the fold assignments as a dict if the file already exists
-    if os.path.isfile(fold_assignments_csv) and os.path.isfile(dist_table_csv) and not force_regenerate:
-        logger.info(f"Fold assignments already exist at {fold_assignments_csv}, loading from file.")
-        fold_assignments_df = pd.read_csv(fold_assignments_csv)
+    if os.path.isfile(path_fold_assignments_csv) and os.path.isfile(dist_table_csv) and not force_regenerate:
+        logger.info(f"Fold assignments already exist at {path_fold_assignments_csv}, loading from file.")
+        fold_assignments_df = pd.read_csv(path_fold_assignments_csv)
         fold_assignments = dict(zip(fold_assignments_df['assembly'], fold_assignments_df['fold']))
 
         logger.info(f"Distance table already exists at {dist_table_csv}, loading from file.")
@@ -105,7 +238,7 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, path_out, n
     full_pathogen_matrix_csv = os.path.join(path_out, f"{pathogen}__{dist_method}__distMatAll.csv")
     # Check if the distance matrix already exists. If not, generate it.
     if (not os.path.isfile(full_pathogen_matrix_csv)) or force_regenerate:
-        full_pathogen_matrix = get_matrix(assemblies_txt, path_root_fna, method=dist_method, force_regenerate=force_regenerate)
+        full_pathogen_matrix = get_matrix(assemblies_txt, method=dist_method, force_regenerate=force_regenerate)
         logger.info(f"Full pathogen distance matrix shape: {full_pathogen_matrix.shape}")
         # save the full distance matrix to a csv file
         pd.DataFrame(full_pathogen_matrix, index=all_pathogen_assemblies, columns=all_pathogen_assemblies).to_csv(full_pathogen_matrix_csv)
@@ -146,143 +279,40 @@ def get_genomic_folds(pathogen, antibiotic, path_dataroot, path_csv, path_out, n
     specie_drug_dist_df = pd.DataFrame(specie_drug_dist_matrix, index=ordered_dataset_assemblies, columns=ordered_dataset_assemblies)
     # Save the specie-drug distance table to a CSV file
     specie_drug_dist_matrix_csv = os.path.join(path_out, f"{pathogen}__{antibiotic}__{dist_method}__distMat.csv")
-    specie_drug_dist_df.to_csv(specie_drug_dist_matrix_csv)
-    logger.info(f"Saved distance matrix to {specie_drug_dist_matrix_csv}")
+    # Check if the distance matrix already exists. If not, save it.
+    if not os.path.isfile(specie_drug_dist_matrix_csv) or force_regenerate:
+        logger.info(f"Saving distance matrix ...")
+        specie_drug_dist_df.to_csv(specie_drug_dist_matrix_csv)
+        logger.info(f"Saved distance matrix to {specie_drug_dist_matrix_csv}")
+    else:
+        logger.info(f"Distance matrix already exists at {specie_drug_dist_matrix_csv}, skipping regeneration.")
+        # Load the distance matrix
+        specie_drug_dist_df = pd.read_csv(specie_drug_dist_matrix_csv, index_col=0)
+        specie_drug_dist_mat = specie_drug_dist_df.values
+        # Check if the shape of the loaded matrix matches the expected shape
+        if specie_drug_dist_mat.shape != specie_drug_dist_matrix.shape:
+            try:
+                # If the shape does not match, raise an error
+                raise ValueError(f"Loaded distance matrix shape {specie_drug_dist_mat.shape} does not match expected shape {specie_drug_dist_matrix.shape}.")
+            except ValueError as e:
+                logger.error(f"Error loading distance matrix: {e}")
+                logger.info("Regenerating the distance matrix...")
+                specie_drug_dist_df.to_csv(specie_drug_dist_matrix_csv)
+                logger.info(f"Saved distance matrix to {specie_drug_dist_matrix_csv}")
 
     # Task 4: Create folds based on the distance matrix, with a csv
-    ### Use the method described in Learning From Limited Data: "Towards Best Practice Techniques for Antimicrobial Resistance Prediction From Whole Genome Sequencing Data", 2021
+    ### If clustering method is "unordered":  Use the method described in 
+    ### Learning From Limited Data: "Towards Best Practice Techniques for Antimicrobial Resistance Prediction From Whole Genome Sequencing Data", 2021
+    fold_assignments = generate_folds(
+        logger,
+        path_fold_assignments_csv,
+        ordered_dataset_assemblies,
+        specie_drug_dist_matrix, 
+        clustering=clustering_method, 
+        num_folds=num_folds
+    )
 
-    logger.info(f"Creating {num_folds} folds based on the distance matrix...")
-    # Begin by selecting seeds, equal to the number of folds, which act as the centroids of the folds.
-
-    fold_seeds = [] # List of indices of the assemblies that will be used as seeds for the folds
-    # Begin by selecting the pair of seeds with the maximum distance between them
-    # This can be done by finding the single biggest entry in the matrix
-    index = np.argmax(specie_drug_dist_matrix)
-    row, col = np.unravel_index(index, specie_drug_dist_matrix.shape)
-    fold_seeds.append(row) 
-    fold_seeds.append(col)
-    
-    # Now additional seeds can be selected by iteratively finding the assembly with the largest minimum distance to an existing seed
-    while len(fold_seeds) < num_folds:
-        # Calculate the minimum distance to an existing seed for each assembly
-        min_distances = np.min(specie_drug_dist_matrix[:, fold_seeds], axis=1)
-        # Find the assembly with the maximum minimum distance
-        new_seed = np.argmax(min_distances)
-        fold_seeds.append(new_seed)
-      
-    logger.info("Assigning assemblies to folds based on the selected seeds...")
-    # Create a list to hold the fold assignments
-    fold_assignments = {}
-    assigned_indices = set()
-    fold_sizes = [1] * num_folds  # Used to logging, to ensure equal distribution of assemblies.
-
-    # Begin by assigning the seeds to their respective folds
-    for i, seed in enumerate(fold_seeds):
-        fold_assignments[ordered_dataset_assemblies[seed]] = i
-        assigned_indices.add(seed)
-
-    # Take turns assigning assemblies to folds, starting with the first seed
-    curr_seed = 0
-    while len(assigned_indices) < len(ordered_dataset_assemblies):
-        # Find the assembly with the maximum distance to the current fold assignments
-        # Calculate the distances from the seed to all assemblies not yet assigned to a fold
-        distances = specie_drug_dist_matrix[seed, :]
-        unassigned_indices = [i for i in list(range(len(ordered_dataset_assemblies))) if i not in assigned_indices]
-        # Find the assembly with the minimum distance to the current seed
-        min_distance_index = np.argmin(distances[unassigned_indices])
-        # Assign this assembly to the current fold
-        fold_assignments[ordered_dataset_assemblies[unassigned_indices[min_distance_index]]] = len(fold_assignments) % num_folds
-        assigned_indices.add(unassigned_indices[min_distance_index])
-        fold_sizes[len(fold_assignments) % num_folds] += 1
-        # Move to the next seed
-        curr_seed = (curr_seed + 1) % num_folds
-
-    # Print the size of each fold 
-    logger.info(f"Fold sizes: {fold_sizes}")
-
-    # Save the fold assignments to a CSV file
-    fold_assignments_df = pd.DataFrame(list(fold_assignments.items()), columns=['assembly', 'fold'])
-    # Save to csv in the path_root_fna folder
-    fold_assignments_df.to_csv(fold_assignments_csv, index=False)
-    logger.info(f"Fold assignments saved to {fold_assignments_csv}")
-
-    # Return the fold assignments as a dict
-    fold_assignments = dict(zip(fold_assignments_df['assembly'], fold_assignments_df['fold']))
     return fold_assignments, specie_drug_dist_df
-
-def folds_stats(folds, dist_table):
-    """
-    Print the minimum, maximum, and average distance between assemblies in each fold.
-    parameters:
-    - dist_table: pd.DataFrame, distance table with assemblies as index and columns
-    - folds: dict, mapping of assembly names to fold numbers
-    """
-    fold_stats = {}
-    for fold in set(folds.values()):
-        # Get the assemblies in the current fold
-        fold_assemblies = [assembly for assembly, f in folds.items() if f == fold]
-        # Get all the assemblies in the other folds
-        other_assemblies = [assembly for assembly, f in folds.items() if f != fold]
-        # Get the distance matrix for the current fold
-        fold_distances = dist_table.loc[fold_assemblies, fold_assemblies].values
-        # Calculate the minimum, maximum, and average distance
-        min_distance = np.min(fold_distances)
-        max_distance = np.max(fold_distances)
-        avg_distance = np.mean(fold_distances)
-        fold_stats[fold] = {
-            'intra_min': min_distance,
-            'intra_max': max_distance,
-            'intra_avg': avg_distance
-        }
-        # Calculate the minimum, maximum and average distance to the other folds
-        other_distances = dist_table.loc[fold_assemblies, other_assemblies].values
-        if other_distances.size > 0:  # Check if there are any distances
-            min_distance_other = np.min(other_distances)
-            max_distance_other = np.max(other_distances)
-            avg_distance_other = np.mean(other_distances)
-            fold_stats[fold].update({
-                'inter_min': min_distance_other,
-                'inter_max': max_distance_other,
-                'inter_avg': avg_distance_other
-            })
-        else:
-            fold_stats[fold].update({
-                'inter_min': None,
-                'inter_max': None,
-                'inter_avg': None
-            })
-
-    # Create a matrix with minimum distances between each pair of folds
-    fold_distance_matrix = pd.DataFrame(index=fold_stats.keys(), columns=fold_stats.keys())
-    for fold1 in fold_stats.keys():
-        for fold2 in fold_stats.keys():
-            if fold1 == fold2:
-                fold_distance_matrix.loc[fold1, fold2] = 0.0
-            else:
-                # Get the assemblies in the current folds
-                fold1_assemblies = [assembly for assembly, f in folds.items() if f == fold1]
-                fold2_assemblies = [assembly for assembly, f in folds.items() if f == fold2]
-                # Get the distance matrix for the current folds
-                distances = dist_table.loc[fold1_assemblies, fold2_assemblies].values
-                if distances.size > 0:
-                    # Calculate the minimum distance between the two folds
-                    min_distance = np.min(distances)
-                    fold_distance_matrix.loc[fold1, fold2] = min_distance
-                else:
-                    fold_distance_matrix.loc[fold1, fold2] = None
-
-
-    # Print the statistics for each fold
-    print("Minimum, maximum, and average distances between assemblies in each fold:")
-    for fold, stats in fold_stats.items():
-        print(f"Fold {fold}: Min: {stats['intra_min']:.6f}, Max: {stats['intra_max']:.6f}, Avg: {stats['intra_avg']:.6f}")
-    print("Minimum, maximum, and average distances to the other folds:")
-    for fold, stats in fold_stats.items():
-        print(f"Fold {fold}: Min: {stats['inter_min']:.6f}, Max: {stats['inter_max']:.6f}, Avg: {stats['inter_avg']:.6f}")
-    print("\nPairwise minimum distances between folds:")
-    print(fold_distance_matrix)
-
 
 
 if __name__ == "__main__":
@@ -294,16 +324,40 @@ if __name__ == "__main__":
     now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
     path_out = os.path.join(args.path_out, args.pathogen, "phylogeny")
     os.makedirs(path_out, exist_ok=True)
-    file_handler = logging.FileHandler(os.path.join(path_out, f"log__{args.pathogen}__{args.antibiotic}__phylogeny_splits.txt"))
+    file_handler = logging.FileHandler(
+        os.path.join(path_out, f"log__{args.pathogen}__{args.antibiotic}__phyloFoldsLog_{args.clustering}.txt"))
     console_handler = logging.StreamHandler()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[file_handler, console_handler]
     )
+    logger = logging.getLogger(__name__) # Ensures the messages sent to the logger have the function name
+    logger.info(f"Arguments: {args}")
 
     # Generate the genomic folds based on the provided arguments
-    folds, dist_table_df = get_genomic_folds(args.pathogen, args.antibiotic, args.path_dataroot, os.path.join(args.path_csv, args.pathogen, "filtered"), args.folds, args.dist_method, args.force_regenerate)
+    folds, dist_table_df = get_genomic_folds(
+        logger=logger,
+        pathogen=args.pathogen,
+        antibiotic=args.antibiotic,
+        path_dataroot=args.path_dataroot,
+        path_csv=os.path.join(args.path_csv, args.pathogen, "filtered"),
+        path_out=path_out,
+        num_folds=args.folds,
+        dist_method=args.dist_method,
+        clustering_method=args.clustering,
+        force_regenerate=args.force_regenerate
+    )
 
     # Print the stats for the folds
-    folds_stats(folds, dist_table_df)
+    fold_stats, fold_distance_matrix = get_folds_stats(folds, dist_table_df)
+    
+    # Print the statistics for each fold
+    logger.info("Minimum, maximum, and average distances between assemblies in each fold:")
+    for fold, stats in fold_stats.items():
+        logger.info(f"Fold {fold}: Min: {stats['intra_min']:.6f}, Max: {stats['intra_max']:.6f}, Avg: {stats['intra_avg']:.6f}")
+    logger.info("Minimum, maximum, and average distances to the other folds:")
+    for fold, stats in fold_stats.items():
+        logger.info(f"Fold {fold}: Min: {stats['inter_min']:.6f}, Max: {stats['inter_max']:.6f}, Avg: {stats['inter_avg']:.6f}")
+    logger.info("\nPairwise minimum distances between folds:")
+    logger.info(f"\n{fold_distance_matrix}")
