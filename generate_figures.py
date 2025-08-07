@@ -7,6 +7,7 @@ import seaborn as sns
 import pickle
 import argparse
 import glob
+from datetime import datetime
 
 
 def get_parser():
@@ -123,22 +124,57 @@ def plot_line_metrics(df_line_plot, pathogen, drug, path_out_dir):
         y="Score",
         hue="Metric",
         marker='o',
-        palette='deep', # A good general-purpose palette
-        linewidth=2
+        palette='deep',
+        linewidth=2,
+        errorbar=None  # Disable seaborn's default errorbar since we'll add custom ones
     )
+    
+    # Add custom error bars for standard deviation
+    for metric in df_line_plot['Metric'].unique():
+        metric_df = df_line_plot[df_line_plot['Metric'] == metric]
+        plt.errorbar(
+            x=metric_df['feature_threshold_numeric'],
+            y=metric_df['Score'],
+            yerr=metric_df['Score_std'],
+            fmt='none',  # Don't plot markers, just error bars
+            capsize=4,   # Size of error bar caps
+            capthick=1.5,
+            alpha=0.7
+        )
+    
+    # Add text labels on top of each marker for readability
+    for metric in df_line_plot['Metric'].unique():
+        metric_df = df_line_plot[df_line_plot['Metric'] == metric]
+        for _, row in metric_df.iterrows():
+            score_text = f"{row['Score']:.3f}" # Format score to 3 decimal places
+            feat_thr = row['feature_threshold']
+            plt.text(
+                x=row['feature_threshold_numeric'], 
+                y=row['Score'], 
+                s=feat_thr,
+                ha='center',      # Horizontal alignment
+                va='bottom',      # Vertically align text above the marker
+                fontsize=9,
+                fontweight='bold'
+            )
 
     # Set x-ticks to be the original string labels, but based on the sorted numeric values
     x_ticks_numeric = sorted(df_line_plot["feature_threshold_numeric"].unique())
-    x_labels_str = [f"{x // 1000}K" for x in x_ticks_numeric]
+    x_labels_str = [f"{int(x // 1000)}K" if x < 1000000 else f"{int(x // 1000000)}M" for x in x_ticks_numeric]
 
-    plt.xticks(x_ticks_numeric, labels=x_labels_str, rotation=45, ha='right')
-    plt.ylim(0.7, 0.9) # Keep the same y-limits
+    plt.xticks(ticks=x_ticks_numeric, labels=x_labels_str, rotation=45, ha='right')
+    
+    # Optional: Adjust Y-axis limits to make space for the text labels above the markers
+    y_min, y_max = plt.ylim()
+    # plt.ylim(y_min, y_max + (y_max - y_min) * 0.1)
+    plt.ylim(0.65, 1)  # Ensure Y-axis is between 0 and 1 for scores 
 
-    plt.title(f"Performance Metrics vs. Feature Threshold for {pathogen} x {drug}", fontsize=14)
+    plt.title(f"Performance Metrics vs. Feature Threshold for {pathogen} x {drug}", fontsize=14, pad=20)
     plt.xlabel("Feature Threshold", fontsize=12)
     plt.ylabel("Score", fontsize=12)
     plt.legend(title='Metric')
     plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout() # Adjust layout to prevent labels from being cut off
 
     output_path_line = os.path.join(path_out_dir, f"{pathogen}_{drug}_metrics_line.png")
     plt.savefig(output_path_line, bbox_inches='tight', dpi=300)
@@ -204,7 +240,8 @@ def main():
     parser = get_parser()
     args = parser.parse_args()
     
-    figs_gridsearch_dir = os.path.join(args.path_out, 'figs_gridSearch')
+    now = datetime.now().strftime(f"%Y%m%d-%H%M%S")
+    figs_gridsearch_dir = os.path.join(args.path_out, f"figs_{args.pathogen}_{args.drug}_{now}")
     # Create output directory if it doesn't exist
     os.makedirs(figs_gridsearch_dir, exist_ok=True)
 
@@ -226,6 +263,8 @@ def main():
             print(f"Skipping file due to naming pattern mismatch: {path_pkl} - {e}")
 
     print(f"Number of relevant reports for {pathogen} and {drug}: {len(specie_drug_reports_paths)}")
+    for path_pkl in specie_drug_reports_paths:
+        print(f" - {path_pkl}")
 
     all_line_plot_data = []
     all_combined_metrics_for_plot = []
@@ -247,6 +286,7 @@ def main():
                 if isinstance(report_data, dict) and "balanced_accuracy_scores" in report_data.keys():
                     # TODO: define list of metrics for line plot (per each fold), store each metric's data in a loop
                     mean_balanced_acc = np.mean(report_data["balanced_accuracy_scores"])
+                    std_balanced_acc = np.std(report_data["balanced_accuracy_scores"])
                     #  mean_f1_macro = np.mean(report_data["f1_macro_scores"])
 
                     exp_info = fetch_experiment_info(path_pkl) # Ensure exp_info is available
@@ -257,7 +297,8 @@ def main():
                          'feature_threshold': feature_threshold_str,
                          'feature_threshold_numeric': feature_threshold_numeric,
                          'Metric': 'Balanced Accuracy',
-                         'Score': mean_balanced_acc
+                         'Score': mean_balanced_acc,
+                         'Score_std': std_balanced_acc
                     })
                     #  all_line_plot_data.append({
                     #      'feature_threshold': feature_threshold_str,
