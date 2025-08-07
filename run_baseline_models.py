@@ -27,6 +27,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     
     logger.info(f"Starting {config.num_folds}-Fold CV for {modelname}...")
 
+    fold_raws = []
     fold_results = []
     best_overall_score = -1
     best_classification_report = ""
@@ -54,12 +55,18 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         # Fit the best model (from sweep) or the standard model on the full training set for the fold
         current_model.fit(X_train, y_train)
         y_pred = current_model.predict(X_test)
+        # Get probabilities, in case we want to use them later for AUC or similar.
+        y_probs = current_model.predict_proba(X_test)[:, 1] if hasattr(current_model, 'predict_proba') else None
         
         # Evaluate
         score = balanced_accuracy_score(y_test, y_pred)
         f1_macro = classification_report(y_test, y_pred, output_dict=True)['macro avg']['f1-score']
         vme, me = compute_major_errors(y_test, y_pred)
-        
+
+        fold_raws.append({
+            "y_true": y_test, "y_pred": y_pred, "resistant_prob_predicted": y_probs, "fold": fold_idx
+        })
+    
         fold_results.append({
             "model_name": modelname, "pathogen": fixed_run_config['pathogen'],
             "pathogen_short": fixed_run_config['pathogen_short'],
@@ -86,6 +93,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     
     # Create a pandas DataFrame for easy calculation and table logging
     results_df = pd.DataFrame(fold_results)
+    raws_df = pd.DataFrame(fold_raws)
     
     # Calculate and log summary statistics
     summary_stats = {
@@ -102,7 +110,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         # "best_fold_accuracy": best_overall_score
     }
     
-    return summary_stats, best_classification_report, results_df
+    return summary_stats, best_classification_report, results_df, raws_df
 
 
 # config_path is a directory relative to this file (run_baseline_models.py)
@@ -232,7 +240,7 @@ def main(cfg: DictConfig):
         model = hydra.utils.instantiate(cfg.model)
 
         logger.info(f"Training {model.__class__.__name__} model...")
-        summary_stats, best_classification_report, fold_results_df = fitmodel_nestedcv(
+        summary_stats, best_classification_report, fold_results_df, raw_cls_df = fitmodel_nestedcv(
             X, y, cv_splits, model, config=cfg, 
             use_sweeps=use_sweeps, 
             sweep_config=sweep_config,
@@ -253,9 +261,16 @@ def main(cfg: DictConfig):
             # Save the results to a CSV file
             save_fname = f"results_{cfg.model.name}__{fname}"
             path_out = os.path.join(output_dir, save_fname)
-            logger.info(f"Results saved to {path_out} ...")
             # results_df = pd.DataFrame(results)
             fold_results_df.to_csv(f"{path_out}.csv", index=False)
+            logger.info(f"Results saved to {path_out} ...")
+
+            # Save the raw classifications to a separate JSON file
+            save_fname_raw = f"raw_classifications_{cfg.model.name}__{fname}"
+            path_out = os.path.join(output_dir, save_fname_raw)
+            raw_cls_df.to_json(f"{path_out}.json", orient="records")
+            logger.info(f"Raw predictions/true labels/probabilities for each fold saved to {path_out}.json ...")
+
 
         
 

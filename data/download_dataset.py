@@ -141,6 +141,11 @@ def main():
     # run a terminal command to download the assemblies
     # for more info: https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/genomes/large-download/
     for assembly in tqdm(assemblies, desc="Downloading genomes from NCBI"):
+        # Check if the assembly directory already exists
+        assembly_dir = os.path.join(path_output, assembly)
+        if os.path.exists(assembly_dir):
+            logger.info(f"Directory {assembly_dir} already exists. Skipping download for {assembly}.")
+            continue
         # 1. run the command to download the assembly
         os.system(f"datasets download genome accession {assembly} --dehydrated --include genome,seq-report --filename {assembly}.zip")
         # 2. unzip the file

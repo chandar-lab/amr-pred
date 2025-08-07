@@ -45,6 +45,12 @@ class KmerFeatures:
         self.path_kmers = path_kmers
         self.path_full_matrix = path_full_matrix
 
+        # Check if the parent directory of the kmers exists, and create it if not
+        if self.path_kmers:
+            if not os.path.exists(os.path.dirname(self.path_kmers)):
+                os.makedirs(os.path.dirname(self.path_kmers))
+                logging.info(f"Created directory {os.path.dirname(self.path_kmers)} for storing kmers.")
+
         # For two-pass approach
         self.kmer_global_counts = Counter()
         self.selected_kmers = set()
@@ -378,6 +384,12 @@ class KmerFeatures:
     def save_matrix(self, X, y, filepath):
         """Save matrix (sparse or dense) and labels to file."""
         from scipy.sparse import issparse
+
+        # Check that the parent folder exists, and if not create it
+        parent_folder = os.path.dirname(filepath)
+        if parent_folder and not os.path.exists(parent_folder):
+            os.makedirs(parent_folder)
+            logging.info(f"Created directory {parent_folder} for saving the matrix.")
         
         if issparse(X):  # Sparse matrix
             logging.info(f"Saving sparse matrix ({X.format}) with shape {X.shape}")

@@ -9,8 +9,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-from genomic_dst_utils import mash_distance_txt, ani_distance_txt, dashing_distance_txt, get_assemblies_txt
-from data_utils import load_data
+from data.genomic_dst_utils import mash_distance_txt, ani_distance_txt, dashing_distance_txt, get_assemblies_txt
+from data.data_utils import load_data
 
 
 def parse_args():
