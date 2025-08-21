@@ -273,7 +273,7 @@ def main(cfg: DictConfig):
             logger.info(f"Results saved to {path_out} ...")
 
             # Save the raw classifications to a separate JSON file
-            save_fname_raw = f"raw_classifications_{cfg.model.name}__{fname}"
+            save_fname_raw = f"probs_{cfg.model.name}__{fname}"
             path_out = os.path.join(path_species, "results", save_fname_raw)
             raw_cls_df.to_json(f"{path_out}.json", orient="records")
             logger.info(f"Raw predictions/true labels/probabilities for each fold saved to {path_out}.json ...")
