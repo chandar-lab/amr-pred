@@ -1,13 +1,15 @@
 # Full kwargs
 # https://xgboost.readthedocs.io/en/stable/parameter.html#xgboost-parameters
-_target_: xgboost.XGBClassifier
 name: 'XGB'
-validate_parameters: True
-verbosity: 0
-booster: gbtree
-objective: 'binary:logistic'
-eval_metric: 'logloss'
-seed: ${seed}
+
+params:
+  _target_: xgboost.XGBClassifier
+  validate_parameters: True
+  verbosity: 0
+  booster: gbtree
+  objective: 'binary:logistic'
+  eval_metric: 'logloss'
+  seed: ${seed}
 
 # Define hyperparameters for the sweep
 sweep:
