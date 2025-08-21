@@ -185,9 +185,10 @@ def main(cfg: DictConfig):
         # Determine if we are running sweeps based on hydra config
         use_sweeps = True if cfg.wandb.use_sweeps else False
         patho_short = f"{cfg.dataset.pathogen.split('_')[0][0]}_{cfg.dataset.pathogen.split('_')[1]}"
-        
+            
         # Define fixed parameters for the run
         fixed_config = {
+            "model_name": cfg.model.name,
             "pathogen": cfg.dataset.pathogen, "antibiotic": cfg.dataset.antibiotic,
             "pathogen_short": patho_short, "k": cfg.matrix.k,
             "feat_mode": cfg.matrix.feat_mode, "max_features": f"{cfg.matrix.max_features//1000}K",
@@ -235,7 +236,7 @@ def main(cfg: DictConfig):
                 
 
         # --- Train Model ---
-        model = hydra.utils.instantiate(cfg.model)
+        model = hydra.utils.instantiate(cfg.model.params)
 
         logger.info(f"Training {model.__class__.__name__} model...")
         summary_stats, best_classification_report, fold_results_df = fitmodel_nestedcv(
