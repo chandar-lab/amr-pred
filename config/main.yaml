@@ -12,6 +12,7 @@ num_folds: 5
 # Primary directories where the data is stored
 path_assemblies_root: "../amr_genomic_data" # FOR NAGA: Use "/home/mila/n/naga-karthik.enamundram/scratch/amr_genomic_data"
 path_datasets_reinterpreted: "./datasets" # FOR NAGA: Use "/home/mila/n/naga-karthik.enamundram/genomicFMs/ncbi_resistance_phenotypes_asts/datasets_reinterpreted"
+clustering_method: "hierarchical" #Options: "unordered", "hierarchical".
 
 # output directory for caching the feature matrix and kmers
 path_out_cache: ./datasets
@@ -32,8 +33,8 @@ split_method: "dashing" #Options: "dashing", "mash", "ani". Only used if use_gen
 wandb:
   project: "amr-prediction"
   entity: "aselstyne"
-  use_sweeps: False
-  sweep_runs_per_fold: 25
+  use_sweeps: True
+  sweep_runs_per_fold: 20
   # mode: "online" # Set to "offline" to disable logging
 
 hydra:

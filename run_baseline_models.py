@@ -265,19 +265,21 @@ def main(cfg: DictConfig):
             run.log(summary_stats)
             run.log({"fold_results": wandb.Table(dataframe=fold_results_df)})
 
+            # Check that the results folder exists
+            os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
+
             # Save the results to a CSV file
             save_fname = f"results_{cfg.model.name}__{fname}"
             path_out = os.path.join(path_species, "results", save_fname)
-            logger.info(f"Results saved to {path_out} ...")
             # results_df = pd.DataFrame(results)
             fold_results_df.to_csv(f"{path_out}.csv", index=False)
-            logger.info(f"Results saved to {path_out} ...")
+            logger.info(f"Results saved to {path_out}.csv...")
 
             # Save the raw classifications to a separate JSON file
             save_fname_raw = f"probs_{cfg.model.name}__{fname}"
             path_out = os.path.join(path_species, "results", save_fname_raw)
-            raw_cls_df.to_json(f"{path_out}.json", orient="records")
-            logger.info(f"Raw predictions/true labels/probabilities for each fold saved to {path_out}.json ...")
+            raw_cls_df.to_json(f"{path_out}.json", orient="records", indent=4)
+            logger.info(f"Raw predictions/true labels/probabilities for each fold saved to {path_out}.json...")
 
 
         
