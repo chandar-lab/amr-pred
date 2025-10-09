@@ -12,6 +12,14 @@ from sklearn.metrics import balanced_accuracy_score, classification_report
 from data.data_utils import load_data
 from features.kmer import KmerFeatures
 
+PATHOGEN_NAME_MAPPER = {
+    "a_baumannii": "acinetobacter_baumannii",
+    "e_coli": "escherichia_coli",
+    "s_aureus": "staphylococcus_aureus",
+    "k_pneumoniae": "klebsiella_pneumoniae",
+    "p_aeruginosa": "pseudomonas_aeruginosa",
+}
+
 
 def get_parser():
     
@@ -92,6 +100,8 @@ def main():
     
     # Ensure output directory exists
     os.makedirs(args.path_out, exist_ok=True)
+    os.makedirs(os.path.join(args.path_out, "feature_matrices"), exist_ok=True)
+    os.makedirs(os.path.join(args.path_out, "unique_kmers"), exist_ok=True)
 
     file_handler = logging.FileHandler(os.path.join(args.path_out, f"inference.log"))
     console_handler = logging.StreamHandler()
@@ -101,13 +111,6 @@ def main():
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[file_handler, console_handler]
     )
-
-    # ---------------------
-    # Load data
-    # ---------------------
-    logging.info("Loading test data from %s", path_data_csv)
-    test_datalist = load_data(path_data_csv, path_root_fna)
-    logging.info("Number of test samples: %d", len(test_datalist))
 
     # ---------------------
     # Load model
@@ -120,11 +123,19 @@ def main():
     # extract kmer size and feature matrix size from the model_path
     model_fname = path_model.split('/')[-1]
     model_info = parse_model_filename(model_fname)
-    k = model_info['kmer_size']
+    k = int(model_info['kmer_size'])
     kmer_mode = model_info['kmer_mode']
     fmat_size = model_info['feature_size']
     max_features = convert_k_to_numeric(fmat_size)
-    pathogen, antibiotic = model_info['pathogen'], model_info['antibiotic'] 
+    pathogen, antibiotic = model_info['pathogen'], model_info['antibiotic']
+
+    # ---------------------
+    # Load data
+    # ---------------------
+    path_root_fna = os.path.join(path_root_fna, PATHOGEN_NAME_MAPPER[pathogen])
+    logging.info("Loading test data from %s", path_data_csv)
+    test_datalist = load_data(path_data_csv, path_root_fna)
+    logging.info("Number of test samples: %d", len(test_datalist))
     
     # ---------------------
     # Feature extraction
