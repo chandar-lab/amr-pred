@@ -1,3 +1,15 @@
+"""
+Script to run inference on a trained model and evaluate its performance on a test dataset.
+Saves predictions and evaluation metrics to specified output directory.
+
+Usage:
+    PYTHONPATH=<path_to_repository> python testing/test_model.py \
+        --path-fna <path_to_fna_files> \
+        --path-csv <path_to_test_csv> \
+        --path-model <path_to_trained_model> \
+        --path-out <output_directory>
+"""
+
 import os
 import re
 import time
@@ -26,9 +38,10 @@ def get_parser():
     parser = argparse.ArgumentParser(description="Run inference.")
 
     parser.add_argument("--path-fna", type=str, 
-                        help="Root path of the dataset genomic sequences for all species")
-    parser.add_argument("--path-csv", type=str, 
-                        default="Path to the csv file containing specie x drug assembly id and mic values")
+                        help="Root path of the dataset genomic sequences for all species. Assumes the genomic files are organized in subdirectories named after the species. "
+                        "E.g., <path_fna>/escherichia_coli/, <path_fna>/staphylococcus_aureus/, etc.")
+    parser.add_argument("--path-csv", type=str, required=True,
+                        help="Path to the csv file containing specie x drug assembly id and mic values")
     parser.add_argument("--path-model", type=str, required=True,
                         help="Path to the trained model (must be a pkl file).")
     parser.add_argument("--path-out", type=str, default=".",
