@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import joblib
 import wandb
 import hydra
 import pandas as pd
@@ -82,6 +83,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         if score > best_overall_score:
             best_overall_score = score
             best_classification_report = classification_report(y_test, y_pred, digits=4)
+            best_model = current_model
 
         logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f} - Time: {time.process_time() - start:.2f}s")
 
@@ -106,7 +108,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         # "best_fold_accuracy": best_overall_score
     }
     
-    return summary_stats, best_classification_report, results_df
+    return summary_stats, best_classification_report, results_df, best_model
 
 
 # config_path is a directory relative to this file (run_baseline_models.py)
@@ -253,12 +255,17 @@ def main(cfg: DictConfig):
         model = hydra.utils.instantiate(cfg.model.params)
 
         logger.info(f"Training {model.__class__.__name__} model...")
-        summary_stats, best_classification_report, fold_results_df = fitmodel_nestedcv(
+        summary_stats, best_classification_report, fold_results_df, best_model = fitmodel_nestedcv(
             X, y, cv_splits, model, config=cfg, 
             use_sweeps=use_sweeps, 
             sweep_config=sweep_config,
             fixed_run_config=fixed_config
         )
+        # save the best model
+        save_fname_model = f"model_{cfg.model.name}__{fname}.pkl"
+        path_out_model = os.path.join(path_species, "models", save_fname_model)
+        logger.info(f"Saving the best model to {path_out_model} ...")
+        joblib.dump(best_model, path_out_model)
 
         # initialize a single wandb run for the whole experiment 
         run_name = f"{cfg.model.name}__{fname}"
