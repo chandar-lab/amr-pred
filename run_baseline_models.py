@@ -31,6 +31,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     logger.info(f"Starting {config.num_folds}-Fold CV for {modelname}...")
 
     fold_results = []
+    predictions_per_fold = []            # <-- store y_true / y_pred per fold
     best_overall_score = -1
     best_classification_report = ""
 
@@ -62,7 +63,21 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         score = balanced_accuracy_score(y_test, y_pred)
         f1_macro = classification_report(y_test, y_pred, output_dict=True)['macro avg']['f1-score']
         vme, me = compute_major_errors(y_test, y_pred)
-        
+
+        # Save per-fold predictions and true labels (convert to python types for serialization)
+        def _to_pylist(arr):
+            try:
+                return [a.item() if hasattr(a, "item") else a for a in list(arr)]
+            except Exception:
+                return list(arr)
+
+        predictions_per_fold.append({
+            "fold": fold_idx,
+            "indices": list(test_idx),
+            "y_true": _to_pylist(y_test),
+            "y_pred": _to_pylist(y_pred)
+        })
+
         fold_results.append({
             "model_name": modelname, "pathogen": fixed_run_config['pathogen'],
             "pathogen_short": fixed_run_config['pathogen_short'],
@@ -108,7 +123,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         # "best_fold_accuracy": best_overall_score
     }
     
-    return summary_stats, best_classification_report, results_df, best_model
+    return summary_stats, best_classification_report, results_df, best_model, predictions_per_fold
 
 
 # config_path is a directory relative to this file (run_baseline_models.py)
@@ -255,12 +270,16 @@ def main(cfg: DictConfig):
         model = hydra.utils.instantiate(cfg.model.params)
 
         logger.info(f"Training {model.__class__.__name__} model...")
-        summary_stats, best_classification_report, fold_results_df, best_model = fitmodel_nestedcv(
+        summary_stats, best_classification_report, fold_results_df, best_model, predictions = fitmodel_nestedcv(
             X, y, cv_splits, model, config=cfg, 
             use_sweeps=use_sweeps, 
             sweep_config=sweep_config,
             fixed_run_config=fixed_config
         )
+        # ensure target dirs exist
+        os.makedirs(os.path.join(path_species, "models"), exist_ok=True)
+        os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
+        
         # save the best model
         save_fname_model = f"model_{cfg.model.name}__{fname}.pkl"
         path_out_model = os.path.join(path_species, "models", save_fname_model)
@@ -284,6 +303,16 @@ def main(cfg: DictConfig):
             logger.info(f"Results saved to {path_out} ...")
             # results_df = pd.DataFrame(results)
             fold_results_df.to_csv(f"{path_out}.csv", index=False)
+
+            # Also save per-fold predictions (y_true, y_pred) so downstream metrics can be computed easily
+            preds_rows = []
+            for p in predictions:
+                for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
+                    preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
+            preds_df = pd.DataFrame(preds_rows)
+            preds_path = os.path.join(path_species, "results", f"predictions__{fname}.csv")
+            preds_df.to_csv(preds_path, index=False)
+            logger.info(f"Per-fold predictions saved to {preds_path}")
 
         
 
