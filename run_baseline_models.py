@@ -6,11 +6,13 @@ import hydra
 import pandas as pd
 from omegaconf import DictConfig, OmegaConf
 
+import scipy.sparse as sp_sparse
 from sklearn.base import clone
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (
     balanced_accuracy_score, classification_report
 )
+from sklearn.feature_extraction.text import TfidfTransformer
 from features.kmer import KmerFeatures
 from features.utils import plot_umap
 from data.data_utils import load_data
@@ -166,6 +168,18 @@ def main(cfg: DictConfig):
     else:
         # Build feature matrix
         X, y = kmer_features.build_feature_matrix(dataset=dataset_list)
+        # NOTE: when using the logistic classifier, normalize the feature matrix using TF-IDF 
+        # because LGR is sensitive to feature scaling
+        if cfg.model.name == "LGR":
+            logger.info(f"Normalizing feature matrix using TF-IDF for {cfg.model.name} model ...")
+            tfidf_transformer = TfidfTransformer(use_idf=True, norm='l2')
+            X = tfidf_transformer.fit_transform(X)
+            # check if X is sparse
+            if sp_sparse.issparse(X):
+                logger.info("Feature matrix is sparse after TF-IDF transformation.")
+                logger.info("Converting to dense array ...")
+                X = X.toarray()
+
         logger.info(f"Feature matrix shape: {X.shape}")
         logger.info(f"Number of samples: {X.shape[0]}")
 
