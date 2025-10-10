@@ -310,7 +310,7 @@ def main(cfg: DictConfig):
                 for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
                     preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
             preds_df = pd.DataFrame(preds_rows)
-            preds_path = os.path.join(path_species, "results", f"predictions__{fname}.csv")
+            preds_path = os.path.join(path_species, "results", f"preds_{cfg.model.name}__{fname}.csv")
             preds_df.to_csv(preds_path, index=False)
             logger.info(f"Per-fold predictions saved to {preds_path}")
 
