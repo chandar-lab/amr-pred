@@ -213,6 +213,7 @@ def get_genomic_folds(logger, pathogen, antibiotic, path_dataroot, path_csv, pat
     dist_table_csv = os.path.join(path_out, f"{pathogen}__{antibiotic}__{dist_method}__distMat.csv")
 
     # Return the fold assignments as a dict if the file already exists
+    # COMMENTED AS DIST TABLE IS NOT NEEDED GENERALLY
     if os.path.isfile(path_fold_assignments_csv) and os.path.isfile(dist_table_csv) and not force_regenerate:
         logger.info(f"Fold assignments already exist at {path_fold_assignments_csv}, loading from file.")
         fold_assignments_df = pd.read_csv(path_fold_assignments_csv)
@@ -277,17 +278,17 @@ def get_genomic_folds(logger, pathogen, antibiotic, path_dataroot, path_csv, pat
 
     # Turn into a dataframe indexed by the assembly names on both axes
     specie_drug_dist_df = pd.DataFrame(specie_drug_dist_matrix, index=ordered_dataset_assemblies, columns=ordered_dataset_assemblies)
-    # Save the specie-drug distance table to a CSV file
-    specie_drug_dist_matrix_csv = os.path.join(path_out, f"{pathogen}__{antibiotic}__{dist_method}__distMat.csv")
+    # # Save the specie-drug distance table to a CSV file
+    # dist_table_csv = os.path.join(path_out, f"{pathogen}__{antibiotic}__{dist_method}__distMat.csv")
     # Check if the distance matrix already exists. If not, save it.
-    if not os.path.isfile(specie_drug_dist_matrix_csv) or force_regenerate:
+    if not os.path.isfile(dist_table_csv) or force_regenerate:
         logger.info(f"Saving distance matrix ...")
-        specie_drug_dist_df.to_csv(specie_drug_dist_matrix_csv)
-        logger.info(f"Saved distance matrix to {specie_drug_dist_matrix_csv}")
+        specie_drug_dist_df.to_csv(dist_table_csv)
+        logger.info(f"Saved distance matrix to {dist_table_csv}")
     else:
-        logger.info(f"Distance matrix already exists at {specie_drug_dist_matrix_csv}, skipping regeneration.")
+        logger.info(f"Distance matrix already exists at {dist_table_csv}, skipping regeneration.")
         # Load the distance matrix
-        specie_drug_dist_df = pd.read_csv(specie_drug_dist_matrix_csv, index_col=0)
+        specie_drug_dist_df = pd.read_csv(dist_table_csv, index_col=0)
         specie_drug_dist_mat = specie_drug_dist_df.values
         # Check if the shape of the loaded matrix matches the expected shape
         if specie_drug_dist_mat.shape != specie_drug_dist_matrix.shape:
@@ -297,8 +298,8 @@ def get_genomic_folds(logger, pathogen, antibiotic, path_dataroot, path_csv, pat
             except ValueError as e:
                 logger.error(f"Error loading distance matrix: {e}")
                 logger.info("Regenerating the distance matrix...")
-                specie_drug_dist_df.to_csv(specie_drug_dist_matrix_csv)
-                logger.info(f"Saved distance matrix to {specie_drug_dist_matrix_csv}")
+                specie_drug_dist_df.to_csv(dist_table_csv)
+                logger.info(f"Saved distance matrix to {dist_table_csv}")
 
     # Task 4: Create folds based on the distance matrix, with a csv
     ### If clustering method is "unordered":  Use the method described in 

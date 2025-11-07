@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import random
 import wandb
 import hydra
 import pandas as pd
@@ -12,7 +13,7 @@ from sklearn.metrics import (
     balanced_accuracy_score, classification_report
 )
 from features.kmer import KmerFeatures
-from features.utils import plot_umap
+from features.utils import plot_umap, efficient_svd, train_val_svd
 from data.data_utils import load_data
 from data.generate_phylogeny_folds import get_genomic_folds
 from training.train_utils import compute_major_errors
@@ -23,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 
 def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, sweep_config=None, fixed_run_config=None):
-    modelname = config.model.name
+    modelname = config.model.name if not config.matrix.reduce_dimensionality else f"{config.model.name}_{config.matrix.reduce_dimensionality}"
+    modelname += f"_sub{int(config.matrix.subsample_frac*100)}" if config.matrix.subsample_frac < 1.0 else ""
     
     logger.info(f"Starting {config.num_folds}-Fold CV for {modelname}...")
 
@@ -36,6 +38,11 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         start = time.process_time()
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = pheno[train_idx], pheno[test_idx]
+
+        if config.matrix.reduce_dimensionality == "fit_svd":
+            logger.info("Reducing dimensionality of feature matrix using efficient SVD...")
+            X_train, X_test = train_val_svd(X_train, X_test)
+
         
         current_model = clone(estimator)
 
@@ -118,6 +125,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
 # config_path is a directory relative to this file (run_baseline_models.py)
 @hydra.main(config_path="config", config_name="main", version_base=None)
 def main(cfg: DictConfig):
+    random.seed(cfg.seed)
     hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
     output_dir = hydra_cfg.runtime.output_dir
 
@@ -133,13 +141,17 @@ def main(cfg: DictConfig):
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
 
     # Parameters
+    model_name = cfg.model.name if not cfg.matrix.reduce_dimensionality else f"{cfg.model.name}_{cfg.matrix.reduce_dimensionality}"
+    if cfg.matrix.subsample_frac < 1.0:
+        model_name += f"_sub{int(cfg.matrix.subsample_frac*100)}"
     min_kmer_freq = 2   # filters out extremely rare k-mers that don't appear at least twice
     k = cfg.matrix.k
     feature_mode = cfg.matrix.feat_mode
     max_features = cfg.matrix.max_features
 
     patho_short = f"{pathogen.split('_')[0][0]}_{pathogen.split('_')[1]}"
-    fname = f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__split_{split}__feat_{(max_features//1000)}K"
+    feat = f"{(max_features//1000)}K"
+    fname = f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__split_{split}__feat_{feat}"
 
     logger.info(f"Training on {pathogen} for {antibiotic} using k-mers of length {k} ...")
 
@@ -160,6 +172,7 @@ def main(cfg: DictConfig):
         batch_size=256,                                         # Smaller batches for memory efficiency
         use_canonical=True,
         use_sparse=cfg.dataset.use_sparse,                            # Use sparse matrix for k-mer features
+        reduce_dimensionality=(cfg.matrix.reduce_dimensionality == "leaky_svd"),                  # Whether to reduce dimensionality with SVD
         path_full_matrix=os.path.join(path_species, "feature_matrices", f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_10M.npz"),
         path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.pkl"),
     )
@@ -196,7 +209,7 @@ def main(cfg: DictConfig):
             
         # Define fixed parameters for the run
         fixed_config = {
-            "model_name": cfg.model.name,
+            "model_name": model_name,
             "pathogen": cfg.dataset.pathogen, "antibiotic": cfg.dataset.antibiotic,
             "pathogen_short": patho_short, "k": cfg.matrix.k,
             "feat_mode": cfg.matrix.feat_mode, "max_features": f"{cfg.matrix.max_features//1000}K",
@@ -207,7 +220,7 @@ def main(cfg: DictConfig):
         sweep_config = None
         if use_sweeps:
             sweep_config = OmegaConf.to_container(cfg.model.sweep, resolve=True)
-            sweep_name = f"SWEEP__{cfg.model.name}__{patho_short}__{antibiotic}__k_{k}__{split}"
+            sweep_name = f"SWEEP__{model_name}__{patho_short}__{antibiotic}__k_{k}__{split}"
             sweep_config['name'] = sweep_name
 
         
@@ -227,21 +240,33 @@ def main(cfg: DictConfig):
             split_indices = []
             for assembly in dataset_list:
                 if assembly['assembly'] in genomic_dict:
-                    split_indices.append(genomic_dict[assembly['assembly']])
+                    # Split indices is the fold number (0 to num_folds-1) for each assembly, following the order of the CSV
+                    split_indices.append(genomic_dict[assembly['assembly']]) 
                 else:
                     raise ValueError(f"Assembly {assembly['assembly']} not found in genomic_dict. Please check the dataset.")
             # Create the train/test splits based on the indices
             for fold_idx in range(cfg.num_folds):
                 train_idx = [i for i, split in enumerate(split_indices) if split != fold_idx]
                 test_idx = [i for i, split in enumerate(split_indices) if split == fold_idx]
-                cv_splits.append((train_idx, test_idx))
+                cv_splits.append((train_idx, test_idx)) # CV Splits is a list of num_folds tuples of (train_idx, test_idx)
         else:
             logger.info("Using random splits for training and testing.")
             # Use StratifiedKFold to create the split indices
             skf = StratifiedKFold(n_splits=cfg.num_folds, shuffle=True, random_state=cfg.seed)
             for train_idx, test_idx in skf.split(X, y):
                 cv_splits.append((train_idx, test_idx))
-                
+
+        # Apply genome subsampling if specified in config
+        if cfg.matrix.subsample_frac < 1.0:
+            logger.info(f"Subsampling the dataset to {cfg.matrix.subsample_frac*100}% of the genomes for training ...")
+            # Subsample uniformly from each training fold
+            for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
+                n_subsample = int(len(train_idx) * cfg.matrix.subsample_frac)
+                train_idx_subsampled = random.sample(train_idx, n_subsample)
+                cv_splits[fold_idx] = (train_idx_subsampled, test_idx)
+            logger.info("New training fold sizes after subsampling:")
+            for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
+                logger.info(f"Fold {fold_idx}: {len(train_idx)}")
 
         # --- Train Model ---
         model = hydra.utils.instantiate(cfg.model.params)
@@ -254,8 +279,8 @@ def main(cfg: DictConfig):
             fixed_run_config=fixed_config
         )
 
-        # initialize a single wandb run for the whole experiment 
-        run_name = f"{cfg.model.name}__{fname}"
+        # initialize a single wandb run for the whole experiment
+        run_name = f"{model_name}__{fname}"
         with wandb.init(
             project=cfg.wandb.project, name=run_name, 
             config=fixed_config, tags=["summary", "baseline", "cv"]
@@ -265,8 +290,11 @@ def main(cfg: DictConfig):
             run.log(summary_stats)
             run.log({"fold_results": wandb.Table(dataframe=fold_results_df)})
 
+            # Create the output results directory
+            os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
+
             # Save the results to a CSV file
-            save_fname = f"results_{cfg.model.name}__{fname}"
+            save_fname = f"results_{run_name}"
             path_out = os.path.join(path_species, "results", save_fname)
             logger.info(f"Results saved to {path_out} ...")
             # results_df = pd.DataFrame(results)
@@ -274,9 +302,9 @@ def main(cfg: DictConfig):
             logger.info(f"Results saved to {path_out} ...")
 
             # Save the raw classifications to a separate JSON file
-            save_fname_raw = f"probs_{cfg.model.name}__{fname}"
+            save_fname_raw = f"probs_{run_name}"
             path_out = os.path.join(path_species, "results", save_fname_raw)
-            raw_cls_df.to_json(f"{path_out}.json", orient="records")
+            raw_cls_df.to_json(f"{path_out}.json", orient="records", indent=4)
             logger.info(f"Raw predictions/true labels/probabilities for each fold saved to {path_out}.json ...")
 
 

@@ -6,22 +6,25 @@ import umap
 
 
 # TODO: change the name of the function
-def efficient_svd(X_sparse, k):
+def efficient_svd(X, k=150):
     """
     Efficient PCA-like approximation using TruncatedSVD on high-dimensional sparse TF-IDF data.
     Simulates centering to estimate explained variance ratio as in true PCA.
     """
-    assert sparse.issparse(X_sparse), "Input must be a sparse matrix."
-
-    n_samples = X_sparse.shape[0]
+    n_samples = X.shape[0]
+    n_features = X.shape[1]
+    # Verify that k is less than min(n_samples, n_features)
+    if k >= min(n_samples, n_features):
+        print(f"Warning: k={k} is too large for data with shape {X.shape}. Setting k to min(n_samples-1, n_features-1).")
+        k = min(n_samples - 1, n_features - 1)
 
     # 1. Fit TruncatedSVD (does not center X)
-    svd = TruncatedSVD(n_components=k, random_state=0)
-    X_proj = svd.fit_transform(X_sparse)  # shape: (n_samples, k)
+    svd = TruncatedSVD(n_components=k, random_state=1993)
+    X_proj = svd.fit_transform(X)  # shape: (n_samples, k)
     components = svd.components_  # shape: (k, n_features)
 
     # 2. Estimate mean of features
-    mu = np.asarray(X_sparse.mean(axis=0)).ravel()
+    mu = np.asarray(X.mean(axis=0)).ravel()
 
     # 3. Estimate projections of mean onto components
     mean_proj = mu @ components.T  # shape: (k,)
@@ -31,7 +34,7 @@ def efficient_svd(X_sparse, k):
     explained_variance = np.sum(X_proj_centered**2, axis=0) / (n_samples - 1)
 
     # 5. Total variance of centered data
-    norm_squared = X_sparse.multiply(X_sparse).sum()
+    norm_squared = np.sum(X.power(2)) if sparse.issparse(X) else np.sum(X**2)
     mean_norm = np.dot(mu, mu)
     total_variance = (norm_squared - n_samples * mean_norm) / (n_samples - 1)
 
@@ -39,6 +42,34 @@ def efficient_svd(X_sparse, k):
     explained_variance_ratio = explained_variance / total_variance
 
     return explained_variance, explained_variance_ratio, X_proj_centered
+
+def train_val_svd(X_train, X_val, k=150):
+    """
+    Fits TruncatedSVD on training data and transforms both training and validation data.
+    """
+    n_samples = X_train.shape[0]
+    n_features = X_train.shape[1]
+    # Verify that k is less than min(n_samples, n_features)
+    if k >= min(n_samples, n_features):
+        print(f"Warning: k={k} is too large for data with shape {X_train.shape}. Setting k to min(n_samples-1, n_features-1).")
+        k = min(n_samples - 1, n_features - 1)
+    
+
+    svd = TruncatedSVD(n_components=k, random_state=1993)
+    X_train_proj = svd.fit_transform(X_train)
+    X_val_proj = svd.transform(X_val)
+    components = svd.components_
+
+
+    # Determine correction factor for train matrix
+    mu = np.asarray(X_train.mean(axis=0)).ravel()
+    mean_proj = mu @ components.T
+    X_train_proj_centered = X_train_proj - mean_proj
+
+    # Correct validation matrix
+    X_val_proj_centered = X_val_proj - mean_proj
+
+    return X_train_proj_centered, X_val_proj_centered
 
 # import umap
 # def plot_umap(X, y, metric='cosine', title=None, save_path=None):
