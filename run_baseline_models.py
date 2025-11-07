@@ -296,10 +296,9 @@ def main(cfg: DictConfig):
             # Save the results to a CSV file
             save_fname = f"results_{run_name}"
             path_out = os.path.join(path_species, "results", save_fname)
-            logger.info(f"Results saved to {path_out} ...")
             # results_df = pd.DataFrame(results)
             fold_results_df.to_csv(f"{path_out}.csv", index=False)
-            logger.info(f"Results saved to {path_out} ...")
+            logger.info(f"Results saved to {path_out}.csv...")
 
             # Save the raw classifications to a separate JSON file
             save_fname_raw = f"probs_{run_name}"

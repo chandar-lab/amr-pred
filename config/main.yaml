@@ -12,6 +12,7 @@ num_folds: 5
 # Primary directories where the data is stored
 path_assemblies_root: "../amr_genomic_data" # FOR NAGA: Use "/home/mila/n/naga-karthik.enamundram/scratch/amr_genomic_data"
 path_datasets_reinterpreted: "./datasets" # FOR NAGA: Use "/home/mila/n/naga-karthik.enamundram/genomicFMs/ncbi_resistance_phenotypes_asts/datasets_reinterpreted"
+clustering_method: "hierarchical" #Options: "unordered", "hierarchical".
 
 # output directory for caching the feature matrix and kmers
 path_out_cache: "./datasets"
