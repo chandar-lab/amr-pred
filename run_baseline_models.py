@@ -2,16 +2,19 @@ import os
 import time
 import logging
 import random
+import joblib
 import wandb
 import hydra
 import pandas as pd
 from omegaconf import DictConfig, OmegaConf
 
+import scipy.sparse as sp_sparse
 from sklearn.base import clone
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (
     balanced_accuracy_score, classification_report
 )
+from sklearn.feature_extraction.text import TfidfTransformer
 from features.kmer import KmerFeatures
 from features.utils import plot_umap, efficient_svd, train_val_svd
 from data.data_utils import load_data
@@ -31,6 +34,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
 
     fold_raws = []
     fold_results = []
+    predictions_per_fold = []            # <-- store y_true / y_pred per fold
     best_overall_score = -1
     best_classification_report = ""
 
@@ -70,10 +74,20 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         f1_macro = classification_report(y_test, y_pred, output_dict=True)['macro avg']['f1-score']
         vme, me = compute_major_errors(y_test, y_pred)
 
-        fold_raws.append({
-            "y_true": y_test, "y_pred": y_pred, "resistant_prob_predicted": y_probs, "fold": fold_idx
+        # Save per-fold predictions and true labels (convert to python types for serialization)
+        def _to_pylist(arr):
+            try:
+                return [a.item() if hasattr(a, "item") else a for a in list(arr)]
+            except Exception:
+                return list(arr)
+
+        predictions_per_fold.append({
+            "fold": fold_idx,
+            "indices": list(test_idx),
+            "y_true": _to_pylist(y_test),
+            "y_pred": _to_pylist(y_pred)
         })
-    
+
         fold_results.append({
             "model_name": modelname, "pathogen": fixed_run_config['pathogen'],
             "pathogen_short": fixed_run_config['pathogen_short'],
@@ -94,6 +108,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         if score > best_overall_score:
             best_overall_score = score
             best_classification_report = classification_report(y_test, y_pred, digits=4)
+            best_model = current_model
 
         logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f} - Time: {time.process_time() - start:.2f}s")
 
@@ -119,7 +134,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         # "best_fold_accuracy": best_overall_score
     }
     
-    return summary_stats, best_classification_report, results_df, raws_df
+    return summary_stats, best_classification_report, results_df, best_model, predictions_per_fold
 
 
 # config_path is a directory relative to this file (run_baseline_models.py)
@@ -187,6 +202,18 @@ def main(cfg: DictConfig):
     else:
         # Build feature matrix
         X, y = kmer_features.build_feature_matrix(dataset=dataset_list)
+        # NOTE: when using the logistic classifier, normalize the feature matrix using TF-IDF 
+        # because LGR is sensitive to feature scaling
+        if cfg.model.name == "LGR":
+            logger.info(f"Normalizing feature matrix using TF-IDF for {cfg.model.name} model ...")
+            tfidf_transformer = TfidfTransformer(use_idf=True, norm='l2')
+            X = tfidf_transformer.fit_transform(X)
+            # check if X is sparse
+            if sp_sparse.issparse(X):
+                logger.info("Feature matrix is sparse after TF-IDF transformation.")
+                logger.info("Converting to dense array ...")
+                X = X.toarray()
+
         logger.info(f"Feature matrix shape: {X.shape}")
         logger.info(f"Number of samples: {X.shape[0]}")
 
@@ -272,12 +299,21 @@ def main(cfg: DictConfig):
         model = hydra.utils.instantiate(cfg.model.params)
 
         logger.info(f"Training {model.__class__.__name__} model...")
-        summary_stats, best_classification_report, fold_results_df, raw_cls_df = fitmodel_nestedcv(
+        summary_stats, best_classification_report, fold_results_df, best_model, predictions = fitmodel_nestedcv(
             X, y, cv_splits, model, config=cfg, 
             use_sweeps=use_sweeps, 
             sweep_config=sweep_config,
             fixed_run_config=fixed_config
         )
+        # ensure target dirs exist
+        os.makedirs(os.path.join(path_species, "models"), exist_ok=True)
+        os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
+        
+        # save the best model
+        save_fname_model = f"model_{cfg.model.name}__{fname}.pkl"
+        path_out_model = os.path.join(path_species, "models", save_fname_model)
+        logger.info(f"Saving the best model to {path_out_model} ...")
+        joblib.dump(best_model, path_out_model)
 
         # initialize a single wandb run for the whole experiment
         run_name = f"{model_name}__{fname}"
@@ -298,14 +334,26 @@ def main(cfg: DictConfig):
             path_out = os.path.join(path_species, "results", save_fname)
             # results_df = pd.DataFrame(results)
             fold_results_df.to_csv(f"{path_out}.csv", index=False)
-            logger.info(f"Results saved to {path_out}.csv...")
+            
+            # Also save per-fold predictions (y_true, y_pred) so downstream metrics can be computed easily
+            preds_rows = []
+            for p in predictions:
+                for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
+                    preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
+            preds_df = pd.DataFrame(preds_rows)
+            preds_path = os.path.join(path_species, "results", f"preds_{cfg.model.name}__{fname}.csv")
+            preds_df.to_csv(preds_path, index=False)
+            logger.info(f"Per-fold predictions saved to {preds_path}")
 
-            # Save the raw classifications to a separate JSON file
-            save_fname_raw = f"probs_{run_name}"
-            path_out = os.path.join(path_species, "results", save_fname_raw)
-            raw_cls_df.to_json(f"{path_out}.json", orient="records", indent=4)
-            logger.info(f"Raw predictions/true labels/probabilities for each fold saved to {path_out}.json ...")
-
+            # Also save per-fold predictions (y_true, y_pred) so downstream metrics can be computed easily
+            preds_rows = []
+            for p in predictions:
+                for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
+                    preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
+            preds_df = pd.DataFrame(preds_rows)
+            preds_path = os.path.join(path_species, "results", f"preds_{cfg.model.name}__{fname}.csv")
+            preds_df.to_csv(preds_path, index=False)
+            logger.info(f"Per-fold predictions saved to {preds_path}")
 
         
 

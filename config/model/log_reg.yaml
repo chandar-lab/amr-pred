@@ -10,6 +10,7 @@ params:
   solver: liblinear # Changed from lbfgs to a compatible solver
   max_iter: 100
   random_state: ${seed}
+  l1_ratio: 0.5 # Only used if penalty is 'elasticnet'
   n_jobs: -1
 
 # Define hyperparameters for the sweep
@@ -26,9 +27,9 @@ sweep:
       max: 100.0
     penalty:
       # We are only using the l1 penalty for Lasso
-      value: 'l1'
+      values: ['l1', 'elasticnet']
     solver:
       # These are the solvers compatible with the l1 penalty
-      values: ['liblinear', 'saga']
+      value: 'saga'
     max_iter:
-      values: [100, 200, 300] # Added more options for convergence
+      values: [300, 400, 500] # Added more options for convergence

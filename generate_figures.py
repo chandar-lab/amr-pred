@@ -14,40 +14,18 @@ def get_parser():
     
     parser = argparse.ArgumentParser(description="Generate figures from classification reports.")
     parser.add_argument("--path-results", type=str, required=True,
-        help="Path to the directory containing classification reports.",)
+        help="Path to the cache_amr directory.",)
     parser.add_argument("--pathogen", type=str, required=True,
         help="Pathogen to filter results by (e.g., 'p_aeruginosa').")
     parser.add_argument("--drug", type=str, required=True,
         help="Drug to filter results by (e.g., 'cefepime').")
+    parser.add_argument("--model", type=str, default="XGB", choices=["XGB", "LGR", "all"],
+        help="Model type to filter results by (e.g., 'XGB'). Default is 'XGB'.")
     parser.add_argument("--path-out", type=str, default="figures",
         help="Path to the output directory for figures. Default is 'figures'.")
     
     return parser
 
-def fetch_experiment_info(path_pkl):
-    """
-    Extracts pathogen, drug, kmer size, and feature threshold from the file name.
-    e.g. results_xgb__p_aeruginosa__cefepime__k_31__mode_count__feat_100K.pkl
-    """
-    filename = os.path.basename(path_pkl)
-    pattern = r'results_(?P<classifier>[\w_]+)__' \
-          r'(?P<pathogen>[\w_]+)__' \
-          r'(?P<drug>[\w_]+)__' \
-          r'(?P<kmer>k_\d+)__' \
-          r'mode_(?P<mode>[\w_]+)__' \
-          r'feat_(?P<feat_thr>\d+K)\.pkl'
-    match = re.match(pattern, filename)
-    if match:
-        return {
-            "classifier": match.group("classifier"),
-            "pathogen": match.group("pathogen"),
-            "drug": match.group("drug"),
-            "kmer": match.group("kmer"),
-            "mode": match.group("mode"),
-            "feature_threshold": match.group("feat_thr")
-        }
-    else:
-        raise ValueError(f"Filename {filename} does not match expected pattern.")
 
 
 def plot_metrics_classification_average(df_combined_metrics, pathogen, drug, metric_type, path_out_dir):
@@ -103,83 +81,92 @@ def plot_metrics_classification_average(df_combined_metrics, pathogen, drug, met
         print(f"No data to plot for {metric_type}.")
 
 
-def plot_line_metrics(df_line_plot, pathogen, drug, path_out_dir):
+def plot_accuracy_by_feature_matrix_size(csv_file: str, output_file_name: str, error_shaded: bool):
     """
-    Plots balanced accuracy score as line plots against feature threshold.
+    Generates and saves a line plot of balanced accuracy vs. feature matrix size.
+
+    This function reads a CSV file, calculates the mean and standard deviation of
+    'balanced_accuracy' for different 'max_features' and 'split_method' values,
+    and plots the results as line graphs on a single figure.
 
     Args:
-        df_line_plot (pd.DataFrame): DataFrame containing 'feature_threshold', 'Metric', and 'Score'.
-        pathogen (str): Name of the pathogen.
-        drug (str): Name of the drug.
-        path_out_dir (str): Directory to save the plot.
+        csv_file (str): The path to the input CSV file.
+        output_file_name (str): The name of the file to save the plot to (e.g., 'plot.png').
+        error_shaded (bool): If True, a shaded region representing the standard
+                             deviation will be plotted around the mean accuracy line.
     """
-    if df_line_plot.empty:
-        print("No data to plot for the line plot.")
+    try:
+        df = pd.read_csv(csv_file)
+    except FileNotFoundError:
+        print(f"Error: The file '{csv_file}' was not found.")
         return
 
-    plt.figure(figsize=(10, 6))
-    sns.lineplot(
-        data=df_line_plot,
-        x="feature_threshold_numeric", # Use the numeric version for plotting
-        y="Score",
-        hue="Metric",
-        marker='o',
-        palette='deep',
-        linewidth=2,
-        errorbar=None  # Disable seaborn's default errorbar since we'll add custom ones
-    )
+    # Helper function to convert 'K' notation (e.g., '5000K') to numeric values
+    def convert_k_to_numeric(val):
+        val = str(val).upper().replace('K', '')
+        return int(val) * 1000
+
+    # Apply the conversion and create a numeric column for sorting
+    df['max_features_numeric'] = df['max_features'].apply(convert_k_to_numeric)
+
+    # Group by split method and feature size, then calculate mean and std dev
+    agg_df = df.groupby(['split_method', 'max_features', 'max_features_numeric'])['balanced_accuracy'].agg(['mean', 'std']).reset_index()
+
+    # Sort the aggregated data by the numeric feature size
+    agg_df = agg_df.sort_values('max_features_numeric')
     
-    # Add custom error bars for standard deviation
-    for metric in df_line_plot['Metric'].unique():
-        metric_df = df_line_plot[df_line_plot['Metric'] == metric]
-        plt.errorbar(
-            x=metric_df['feature_threshold_numeric'],
-            y=metric_df['Score'],
-            yerr=metric_df['Score_std'],
-            fmt='none',  # Don't plot markers, just error bars
-            capsize=4,   # Size of error bar caps
-            capthick=1.5,
-            alpha=0.7
+    # Plotting
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    split_methods = agg_df['split_method'].unique()
+    # Create a color map for plotting multiple lines
+    colors = plt.cm.viridis(np.linspace(0, 1, len(split_methods)))
+
+    for i, method in enumerate(split_methods):
+        method_df = agg_df[agg_df['split_method'] == method]
+        
+        # Plot the mean accuracy line
+        ax.plot(
+            method_df['max_features_numeric'], 
+            method_df['mean'], 
+            marker='o', linestyle='-', 
+            label=f'Split Method: {method}', 
+            color=colors[i]
         )
+
+        # Add the shaded error region if requested
+        if error_shaded:
+            y_upper = method_df['mean'] + method_df['std']
+            y_lower = method_df['mean'] - method_df['std']
+            ax.fill_between(method_df['max_features_numeric'], y_lower, y_upper, alpha=0.2, color=colors[i])
+
+    # --- Formatting the plot ---
+    combination = f"{df['pathogen_short'].iloc[0]} x {df['antibiotic'].iloc[0]}"
+    ax.set_xscale('log') # Set the x-axis to a logarithmic scale
+    ax.set_title(f"{combination}: Accuracy vs. Feature Matrix Size (k=17)", fontsize=13, fontweight='bold')
+    ax.set_xlabel('Feature Matrix Size (max_features)', fontsize=12)
+    ax.set_ylabel('Averaged Balanced Accuracy', fontsize=12)
     
-    # Add text labels on top of each marker for readability
-    for metric in df_line_plot['Metric'].unique():
-        metric_df = df_line_plot[df_line_plot['Metric'] == metric]
-        for _, row in metric_df.iterrows():
-            score_text = f"{row['Score']:.3f}" # Format score to 3 decimal places
-            feat_thr = row['feature_threshold']
-            plt.text(
-                x=row['feature_threshold_numeric'], 
-                y=row['Score'], 
-                s=feat_thr,
-                ha='center',      # Horizontal alignment
-                va='bottom',      # Vertically align text above the marker
-                fontsize=9,
-                fontweight='bold'
-            )
-
-    # Set x-ticks to be the original string labels, but based on the sorted numeric values
-    x_ticks_numeric = sorted(df_line_plot["feature_threshold_numeric"].unique())
-    x_labels_str = [f"{int(x // 1000)}K" if x < 1000000 else f"{int(x // 1000000)}M" for x in x_ticks_numeric]
-
-    plt.xticks(ticks=x_ticks_numeric, labels=x_labels_str, rotation=45, ha='right')
+    # Create a sorted mapping of numeric values to their string labels
+    tick_map = agg_df[['max_features_numeric', 'max_features']].drop_duplicates().sort_values('max_features_numeric')
+    # replace '1000K' with '1M', 5000K with 5M
+    for feat in tick_map['max_features']:
+        if feat.endswith('K'):
+            num = int(feat[:-1])
+            if num >= 1000:
+                tick_map['max_features'] = tick_map['max_features'].replace({feat: f"{num//1000}M"})
     
-    # Optional: Adjust Y-axis limits to make space for the text labels above the markers
-    y_min, y_max = plt.ylim()
-    # plt.ylim(y_min, y_max + (y_max - y_min) * 0.1)
-    plt.ylim(0.65, 1)  # Ensure Y-axis is between 0 and 1 for scores 
+    # Apply the correctly sorted ticks and labels
+    ax.set_ylim(0.3, 1)
+    ax.set_xticks(tick_map['max_features_numeric'])
+    ax.set_xticklabels(tick_map['max_features'], rotation=45, ha='right')
 
-    plt.title(f"Performance Metrics vs. Feature Threshold for {pathogen} x {drug}", fontsize=14, pad=20)
-    plt.xlabel("Feature Threshold", fontsize=12)
-    plt.ylabel("Score", fontsize=12)
-    plt.legend(title='Metric')
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.tight_layout() # Adjust layout to prevent labels from being cut off
-
-    output_path_line = os.path.join(path_out_dir, f"{pathogen}_{drug}_metrics_line.png")
-    plt.savefig(output_path_line, bbox_inches='tight', dpi=300)
-    print(f"Saved line plot to {output_path_line}")
-    plt.close()
+    ax.legend(title='Split Method', fontsize=10)
+    # Save the figure to a file
+    plt.tight_layout() # Ensure everything fits without overlapping
+    plt.savefig(output_file_name, bbox_inches='tight', dpi=300)
+    print(f"Log scale plot successfully saved to '{output_file_name}'")
 
 
 def plot_per_class_metrics(df_per_class_metrics, pathogen, drug, path_out_dir):
@@ -241,223 +228,45 @@ def main():
     args = parser.parse_args()
     
     now = datetime.now().strftime(f"%Y%m%d-%H%M%S")
-    figs_gridsearch_dir = os.path.join(args.path_out, f"figs_{args.pathogen}_{args.drug}_{now}")
+    specie_drug_combination = f"{args.pathogen.split('_')[0][0]}_{args.pathogen.split('_')[1]}__{args.drug}"
+    
+    figs_dir = os.path.join(args.path_out, f"figs_{specie_drug_combination}") #_{now}")
     # Create output directory if it doesn't exist
-    os.makedirs(figs_gridsearch_dir, exist_ok=True)
+    os.makedirs(figs_dir, exist_ok=True)
 
     # Fetch all pickle files in the results directory
-    path_results = args.path_results
-    pkl_files = glob.glob(os.path.join(path_results, "**", "*.pkl"), recursive=True)    # recursively search subdirectories 
-    print(f"Found {len(pkl_files)} pickle files")
-
-    pathogen, drug = args.pathogen, args.drug
-    specie_drug_reports_paths = [] 
-
-    # Filter pickle files for the specified pathogen and drug
-    for path_pkl in pkl_files:
-        try:
-            exp_info = fetch_experiment_info(path_pkl)
-            if exp_info["pathogen"] == pathogen and exp_info["drug"] == drug:
-                specie_drug_reports_paths.append(path_pkl)
-        except ValueError as e:
-            print(f"Skipping file due to naming pattern mismatch: {path_pkl} - {e}")
-
-    print(f"Number of relevant reports for {pathogen} and {drug}: {len(specie_drug_reports_paths)}")
-    for path_pkl in specie_drug_reports_paths:
-        print(f" - {path_pkl}")
-
-    all_line_plot_data = []
-    all_combined_metrics_for_plot = []
-    all_per_class_metrics_data = []
-
-    for path_pkl in specie_drug_reports_paths:
-        # Load the classification report from the pickle file
-        with open(path_pkl, 'rb') as f:
-            try:
-                report_data = pickle.load(f)
-                report_dict = None # Initialize to None
-
-                if isinstance(report_data, pd.DataFrame) and 'classification_report' in report_data.columns:
-                    report_dict = report_data['classification_report'].iloc[0] # Assuming dict is in first row
-                else:
-                    report_dict = report_data['best_classification_report']
-
-                # Try to extract balanced_accuracy_scores and f1_macro_scores for line plot
-                if isinstance(report_data, dict) and "balanced_accuracy_scores" in report_data.keys():
-                    # TODO: define list of metrics for line plot (per each fold), store each metric's data in a loop
-                    mean_balanced_acc = np.mean(report_data["balanced_accuracy_scores"])
-                    std_balanced_acc = np.std(report_data["balanced_accuracy_scores"])
-                    #  mean_f1_macro = np.mean(report_data["f1_macro_scores"])
-
-                    exp_info = fetch_experiment_info(path_pkl) # Ensure exp_info is available
-                    feature_threshold_str = exp_info["feature_threshold"]
-                    feature_threshold_numeric = int(feature_threshold_str.replace("K", "")) * 1000
-
-                    all_line_plot_data.append({
-                         'feature_threshold': feature_threshold_str,
-                         'feature_threshold_numeric': feature_threshold_numeric,
-                         'Metric': 'Balanced Accuracy',
-                         'Score': mean_balanced_acc,
-                         'Score_std': std_balanced_acc
-                    })
-                    #  all_line_plot_data.append({
-                    #      'feature_threshold': feature_threshold_str,
-                    #      'feature_threshold_numeric': feature_threshold_numeric,
-                    #      'Metric': 'F1 Macro',
-                    #      'Score': mean_f1_macro
-                    #  })
-                else:
-                    print(f"Warning: {path_pkl} dict does not contain 'balanced_accuracy_scores'. Skipping for line plot data collection.")
-
-            except Exception as e:
-                print(f"Error loading pickle file {path_pkl}: {e}. Skipping all plots for this file.")
-                continue
-        
-        # Extract information from the file name
-        exp_info = fetch_experiment_info(path_pkl)
-
-        feature_threshold = exp_info["feature_threshold"]
-        kmer_size = exp_info["kmer"]
-        classifier_type = exp_info["classifier"] # Added classifier for uniqueness if needed
-
-        # Prepare a unique ID for each experiment configuration
-        experiment_id = f"K={kmer_size.split('_')[1]} Feat={feature_threshold}"
-        # If you have different classifiers, you might add f"{classifier_type} - K={kmer_size.split('_')[1]} Feat={feature_threshold}"
-
-        # --- New Logic for grouped bar chart ---
-        # Ensure 'report_dict' is the actual classification_report dictionary
-        if 'macro avg' in report_dict and 'weighted avg' in report_dict:
-            # Add Macro Average metrics
-            all_combined_metrics_for_plot.append({
-                'Experiment ID': experiment_id,
-                'Metric Type': 'Macro Average',
-                'Metric': 'Precision', 'Score': report_dict['macro avg']['precision']
-            })
-            all_combined_metrics_for_plot.append({
-                'Experiment ID': experiment_id,
-                'Metric Type': 'Macro Average',
-                'Metric': 'Recall', 'Score': report_dict['macro avg']['recall']
-            })
-            all_combined_metrics_for_plot.append({
-                'Experiment ID': experiment_id,
-                'Metric Type': 'Macro Average',
-                'Metric': 'F1-score', 'Score': report_dict['macro avg']['f1-score']
-            })
-            # Add Weighted Average metrics
-            all_combined_metrics_for_plot.append({
-                'Experiment ID': experiment_id,
-                'Metric Type': 'Weighted Average',
-                'Metric': 'Precision', 'Score': report_dict['weighted avg']['precision']
-            })
-            all_combined_metrics_for_plot.append({
-                'Experiment ID': experiment_id,
-                'Metric Type': 'Weighted Average',
-                'Metric': 'Recall', 'Score': report_dict['weighted avg']['recall']
-            })
-            all_combined_metrics_for_plot.append({
-                'Experiment ID': experiment_id,
-                'Metric Type': 'Weighted Average',
-                'Metric': 'F1-score', 'Score': report_dict['weighted avg']['f1-score']
-            })
-        else:
-            print(f"Warning: {path_pkl} does not contain 'macro avg' or 'weighted avg' in its report dictionary. Skipping for grouped bar plot.")
-
-
-        # ========================
-        # Logic for per-class metrics grouped bar chart
-        # ========================
-        if report_dict:
-            # Iterate through classes '0', '1', etc. (assuming binary classification)
-            for class_label in report_dict.keys():
-                if isinstance(report_dict[class_label], dict) and class_label in ['0', '1']: # Ensure it's a class dictionary
-                    all_per_class_metrics_data.append({
-                        'Experiment ID': experiment_id,
-                        'Class': class_label,
-                        'Metric': 'Precision', 'Score': report_dict[class_label]['precision']
-                    })
-                    all_per_class_metrics_data.append({
-                        'Experiment ID': experiment_id,
-                        'Class': class_label,
-                        'Metric': 'Recall', 'Score': report_dict[class_label]['recall']
-                    })
-                    all_per_class_metrics_data.append({
-                        'Experiment ID': experiment_id,
-                        'Class': class_label,
-                        'Metric': 'F1-score', 'Score': report_dict[class_label]['f1-score']
-                    })
-            if not any(isinstance(report_dict[k], dict) and 'precision' in report_dict[k] for k in report_dict.keys() if k not in ['accuracy', 'macro avg', 'weighted avg']):
-                 print(f"Warning: {path_pkl} report_dict does not contain valid per-class metrics. Skipping for per-class bar plot.")
-        else:
-            print(f"Warning: {path_pkl} has no valid report_dict. Skipping for per-class bar plot.")
-
-    # ======================
-    # Line Plot 
-    # ======================
-    df_line_plot = pd.DataFrame(all_line_plot_data)
-    if not df_line_plot.empty:
-        df_line_plot.sort_values(by="feature_threshold_numeric", inplace=True)
-        plot_line_metrics(
-            df_line_plot,
-            pathogen,
-            drug,
-            figs_gridsearch_dir
-        )
+    path_csvs = os.path.join(args.path_results, args.pathogen, "results")
+    print(f"Searching for CSV files in {path_csvs}")
+    # csvs = glob.glob(os.path.join(path_csvs, "*.csv"))
+    if args.model == 'all':
+        csvs = glob.glob(os.path.join(path_csvs, f"*{args.drug}*.csv"), recursive=True)
     else:
-        print("No data collected for the line plot (balanced_accuracy and f1_macro).")
+        csvs = glob.glob(os.path.join(path_csvs, f"*{args.model}*{args.drug}*.csv"), recursive=True)
+    print(f"Found {len(csvs)} files for combination: {specie_drug_combination}")
 
-    # ======================
-    # Grouped Bar Chart for Macro and Weighted Average Metrics
-    # ======================
-    if all_combined_metrics_for_plot:
-        df_combined_metrics_for_plot = pd.DataFrame(all_combined_metrics_for_plot)
+    # keep only those CSVs where k=17
+    csvs = [c for c in csvs if "k_17" in c]
+    print(f"Filtered to {len(csvs)} files with k=17")
 
-        # Sort the 'Experiment ID' for better visualization if it contains numbers
-        # This assumes format like "K=X Feat=YK"
-        def sort_key(exp_id):
-            parts = exp_id.replace('K=', '').replace('Feat=', '').replace('K', '').split(' ')
-            k_val = int(parts[0])
-            feat_val = int(parts[1])
-            return (k_val, feat_val)
+    dfs = []
+    # Load the results into a DataFrame
+    for file in csvs:
+        df = pd.read_csv(file)
+        if 'split_method' in df.columns:
+            df['split_method'] = df['split_method'].replace({'rand': 'random'})
+        dfs.append(df)
 
-        df_combined_metrics_for_plot['Experiment ID_sort_key'] = df_combined_metrics_for_plot['Experiment ID'].apply(sort_key)
-        df_combined_metrics_for_plot.sort_values(by='Experiment ID_sort_key', inplace=True)
-        df_combined_metrics_for_plot.drop(columns='Experiment ID_sort_key', inplace=True)
+    df_mega = pd.concat(dfs, ignore_index=True)
+    print(f"Combined DataFrame shape: {df_mega.shape}")
+    # save combined dataframe
+    combined_csv_path = os.path.join(figs_dir, f"{specie_drug_combination}_combined.csv")
+    df_mega.to_csv(combined_csv_path, index=False)
+    print(f"Saved combined CSV to {combined_csv_path}")
 
-        plot_metrics_classification_average(
-            df_combined_metrics_for_plot,
-            pathogen,
-            drug,
-            'macro_avg',  # Plot Macro Average metrics
-            figs_gridsearch_dir # Pass the directory for saving
-        )
-    else:
-        print("No data found for the grouped bar chart (macro/weighted average metrics).")
-    
-    # ======================
-    # Grouped Bar Chart for Per-Class Metrics
-    # ======================
-    if all_per_class_metrics_data:
-        df_per_class_metrics = pd.DataFrame(all_per_class_metrics_data)
-        # Apply the same sorting to ensure consistency across plots
-        def sort_key(exp_id):
-            parts = exp_id.replace('K=', '').replace('Feat=', '').replace('K', '').split(' ')
-            k_val = int(parts[0])
-            feat_val = int(parts[1])
-            return (k_val, feat_val)
+    # Plot accuracy vs. feature matrix size
+    output_plot_path = os.path.join(figs_dir, f"{specie_drug_combination}_acc_vs_fMat.png")
+    plot_accuracy_by_feature_matrix_size(combined_csv_path, output_plot_path, error_shaded=True)
 
-        df_per_class_metrics['Experiment ID_sort_key'] = df_per_class_metrics['Experiment ID'].apply(sort_key)
-        df_per_class_metrics.sort_values(by='Experiment ID_sort_key', inplace=True)
-        df_per_class_metrics.drop(columns='Experiment ID_sort_key', inplace=True)
-
-        plot_per_class_metrics(
-            df_per_class_metrics,
-            pathogen,
-            drug,
-            figs_gridsearch_dir
-        )
-    else:
-        print("No data found for per-class metrics, even though --plot-per-class was specified.")
-        
         
 if __name__ == "__main__":
     main()
