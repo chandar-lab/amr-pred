@@ -1,14 +1,6 @@
 """
 Script for downloading genomic data from NCBI for AMR prediction. It assumes that the user has 
 already downloaded the isolates and ASTs databases from NCBI. 
-AND
-that the user has the datasets command line tool installed and configured. Installation instructions:
-
-Using CURL:
-curl -o ncbi_datasets 'https://ftp.ncbi.nlm.nih.gov/pub/datasets/command-line/v2/linux-amd64/datasets'
-chmod +x ncbi_datasets
-Using conda:
-conda install -c conda-forge ncbi-datasets-cli
 
 The script does the following:
 1. Loads the isolates and ASTs databases from NCBI.
@@ -146,16 +138,20 @@ def main():
     assemblies = mega_df['Assembly'].unique()
     logger.info(f"Number of unique assemblies: {len(assemblies)}")
 
-    path_binary = "/home/mila/n/naga-karthik.enamundram/genomicFMs"
     # run a terminal command to download the assemblies
     # for more info: https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/genomes/large-download/
     for assembly in tqdm(assemblies, desc="Downloading genomes from NCBI"):
+        # Check if the assembly directory already exists
+        assembly_dir = os.path.join(path_output, assembly)
+        if os.path.exists(assembly_dir):
+            logger.info(f"Directory {assembly_dir} already exists. Skipping download for {assembly}.")
+            continue
         # 1. run the command to download the assembly
-        os.system(f"{path_binary}/datasets download genome accession {assembly} --dehydrated --include genome,seq-report --filename {assembly}.zip")
+        os.system(f"datasets download genome accession {assembly} --dehydrated --include genome,seq-report --filename {assembly}.zip")
         # 2. unzip the file
         os.system(f"unzip {assembly}.zip -d {path_output}/{assembly}")
         # 3. rehydrate the file
-        os.system(f"{path_binary}/datasets rehydrate --directory {path_output}/{assembly}")
+        os.system(f"datasets rehydrate --directory {path_output}/{assembly}")
         # 4. remove the zip file
         os.system(f"rm {assembly}.zip")
 

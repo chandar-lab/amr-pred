@@ -2,11 +2,14 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from collections import Counter
 from Bio import SeqIO
+from sklearn.kernel_approximation import svd
 from tqdm import tqdm
 import logging
 import gc
 import pickle
 import os
+
+from features.utils import efficient_svd
 
 class KmerFeatures:
     def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False,
@@ -45,6 +48,12 @@ class KmerFeatures:
         self.path_kmers = path_kmers
         self.path_full_matrix = path_full_matrix
 
+        # Check if the parent directory of the kmers exists, and create it if not
+        if self.path_kmers:
+            if not os.path.exists(os.path.dirname(self.path_kmers)):
+                os.makedirs(os.path.dirname(self.path_kmers))
+                logging.info(f"Created directory {os.path.dirname(self.path_kmers)} for storing kmers.")
+
         # For two-pass approach
         self.kmer_global_counts = Counter()
         self.selected_kmers = set()
@@ -74,7 +83,9 @@ class KmerFeatures:
         return kmers
 
     def _count_global_kmers(self, dataset):
-        """First pass: count all k-mers globally for initial filtering."""
+        """First pass: count all k-mers globally for initial filtering.
+        
+        Only called when a pre-computed matrix is not available."""
 
         # Check if precomputed frequent k-mers are available
         if self.path_kmers:
@@ -90,13 +101,18 @@ class KmerFeatures:
             # Compute frequent k-mers from scratch
             frequent_kmers = self._compute_kmers(dataset)
         
+        # "frequent-kmers" contains kmer: total-count after min frequency filtering
         # Initial selection based on frequency (if max_features specified)
         if self.max_features and len(frequent_kmers) > self.max_features:
+            # Sort so frequent k-mers are first
             sorted_kmers = sorted(frequent_kmers.items(), key=lambda x: x[1], reverse=True)
+            # Select top N
             selected_kmers_with_counts = sorted_kmers[:self.max_features]
+            # Drop the counts, keep only k-mers
             self.selected_kmers = {kmer for kmer, _ in selected_kmers_with_counts}
             logging.info(f"Pre-selected top {self.max_features} most frequent k-mers")
         else:
+            # This will get sorted in the next step; order does not matter here
             self.selected_kmers = set(frequent_kmers.keys())
         
         # Create initial k-mer to column mapping
@@ -111,12 +127,14 @@ class KmerFeatures:
         gc.collect()
 
     def _compute_kmers(self, dataset):
-        """Compute frequent k-mers from dataset and optionally save to file."""
+        """Compute frequent k-mers from dataset and optionally save to file.
+        
+        If saved, it will be to a pickle of k-mer: total-count dictionary. This is not in sorted order"""
         logging.info("Computing k-mer frequencies from dataset...")
         
         for i, entry in enumerate(tqdm(dataset, desc="Counting k-mers")):
-            kmers = self._extract_kmers_from_file(entry['seq'])
-            self.kmer_global_counts.update(kmers)
+            kmers = self._extract_kmers_from_file(entry['seq']) # List of all kmers in order of appearance
+            self.kmer_global_counts.update(kmers) # Counter object; counts all kmers across the dataset
             
             if i % 100 == 0:
                 gc.collect()    # Periodically clear memory
@@ -250,9 +268,17 @@ class KmerFeatures:
                 self.kmer_to_col = {col_to_kmer_full[i]: i for i in range(self.max_features)}
                 
                 logging.info(f"Sub-sampled matrix shape: {X_sub.shape}")
+                if self.reduce_dim:
+                    logging.info("Applying dimensionality reduction using SVD...")
+                    _, _, X_reduced = efficient_svd(X_sub)
+                    return X_reduced, y
                 return X_sub, y
             else:
                 logging.info("Using the full pre-loaded matrix as max_features is not smaller.")
+                if self.reduce_dim:
+                    logging.info("Applying dimensionality reduction using SVD...")
+                    _, _, X_reduced = efficient_svd(X_full)
+                    return X_reduced, y
                 return X_full, y
 
         # # --- EXISTING: Priority 2 - Load from standard precomputed file ---
@@ -280,6 +306,11 @@ class KmerFeatures:
         if self.path_full_matrix:
             logging.info(f"Saving the newly built matrix to {self.path_full_matrix} for future use.")
             self.save_matrix(X, y, self.path_full_matrix)
+        
+        if self.reduce_dim:
+            logging.info("Applying dimensionality reduction using SVD...")
+            _, _, X_reduced = efficient_svd(X_full)
+            return X_reduced, y
             
         return X, y
 
@@ -322,18 +353,24 @@ class KmerFeatures:
         if self.reduce_dim:
             logging.info("Applying dimensionality reduction using SVD...")
             from sklearn.decomposition import TruncatedSVD
-            n_components = min(min(X.shape) - 1, 1000)
+            n_components = 100 #min(min(X.shape) - 1, 1000)
             svd = TruncatedSVD(n_components=n_components, random_state=42)
-            X_reduced = svd.fit_transform(X)
-            logging.info(f"Reduced dimensions from {X.shape[1]} to {X_reduced.shape[1]}")
-            return X_reduced, y
+            # Fit to get the uncorrected verion, then apply correction for column means
+            X_uncorrected = svd.fit_transform(X)
+            V = svd.components_
+            # correct using column means; project each component onto the mean vector, then subtract
+            mu = np.asarray(X.mean(axis=0)).ravel()
+            mean_proj = mu @ V.T  # shape (n_components,)
+            X_corrected = X_uncorrected - mean_proj[None, :]
+            logging.info(f"Reduced dimensions from {X.shape[1]} to {X_corrected.shape[1]}")
+            return X_corrected, y
 
         return X, y
 
     def _build_dense_matrix(self, dataset):
         """Build dense numpy matrix."""
         n_rows = len(dataset)
-        n_cols = len(self.kmer_to_col)
+        n_cols = len(self.kmer_to_col) # kmer_to_col only includes as many columns as was specified
         
         logging.info(f"Building dense matrix: {n_rows} samples x {n_cols} features")
         
@@ -358,15 +395,6 @@ class KmerFeatures:
         logging.info(f"Final dense matrix shape: {X.shape}")
         logging.info(f"Memory usage: ~{X.nbytes / 1024**2:.1f} MB")
 
-        if self.reduce_dim:
-            logging.info("Applying dimensionality reduction using SVD...")
-            from sklearn.decomposition import TruncatedSVD
-            n_components = min(min(X.shape) - 1, 1000)
-            svd = TruncatedSVD(n_components=n_components, random_state=42)
-            X_reduced = svd.fit_transform(X)
-            logging.info(f"Reduced dimensions from {X.shape[1]} to {X_reduced.shape[1]}")
-            return X_reduced, y
-
         return X, y
 
     def get_feature_names(self):
@@ -378,6 +406,12 @@ class KmerFeatures:
     def save_matrix(self, X, y, filepath):
         """Save matrix (sparse or dense) and labels to file."""
         from scipy.sparse import issparse
+
+        # Check that the parent folder exists, and if not create it
+        parent_folder = os.path.dirname(filepath)
+        if parent_folder and not os.path.exists(parent_folder):
+            os.makedirs(parent_folder)
+            logging.info(f"Created directory {parent_folder} for saving the matrix.")
         
         if issparse(X):  # Sparse matrix
             logging.info(f"Saving sparse matrix ({X.format}) with shape {X.shape}")

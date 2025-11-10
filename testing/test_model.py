@@ -149,6 +149,15 @@ def main():
     logging.info("Loading test data from %s", path_data_csv)
     test_datalist = load_data(path_data_csv, path_root_fna)
     logging.info("Number of test samples: %d", len(test_datalist))
+
+    # ---------------------
+    # Load kmers
+    # ---------------------
+    model_parent_path = os.path.dirname(path_model)
+    path_kmers = os.path.join(model_parent_path, f"kmers_{pathogen}__{antibiotic}__k_{k}__feat_{fmat_size}.pkl")
+    if not os.path.isfile(path_kmers):
+        # Throw an error if kmer file not found; it's necessary
+        raise FileNotFoundError(f"K-mer file not found: {path_kmers}. Necessary for feature extraction.")
     
     # ---------------------
     # Feature extraction
@@ -164,8 +173,7 @@ def main():
         use_sparse=False,
         path_full_matrix=os.path.join(
             path_out, "feature_matrices", f"{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_{fmat_size}.npz"),
-        path_kmers=os.path.join(
-            path_out, "unique_kmers", f"{pathogen}__{antibiotic}__k_{k}.pkl"),
+        path_kmers=path_kmers
     )
 
     logging.info("Extracting k-mer features")
