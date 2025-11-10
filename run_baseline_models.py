@@ -6,6 +6,7 @@ import joblib
 import wandb
 import hydra
 import pandas as pd
+import pickle
 from omegaconf import DictConfig, OmegaConf
 
 import scipy.sparse as sp_sparse
@@ -314,6 +315,20 @@ def main(cfg: DictConfig):
         path_out_model = os.path.join(path_species, "models", save_fname_model)
         logger.info(f"Saving the best model to {path_out_model} ...")
         joblib.dump(best_model, path_out_model)
+
+        # save kmers for this size
+        save_fname_kmers = f"kmers_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl"
+        path_out_kmers = os.path.join(path_species, "models", save_fname_kmers)
+        # Load the pickle file for frequent k-mers and truncate it's size to match the model
+        with open(kmer_features.path_kmers, "rb") as f:
+            kmer_counts_dict = pickle.load(f)
+        # Create a list of k-mers sorted by their frequencies (descending)
+        kmer_counts_sorted = sorted(kmer_counts_dict.items(), key=lambda x: x[1], reverse=True)
+        kmer_counts_dict_truncated = dict(kmer_counts_sorted[:max_features])
+        # Save the truncated kmer features dict
+        with open(path_out_kmers, "wb") as f:
+            pickle.dump(kmer_counts_dict_truncated, f)
+
 
         # initialize a single wandb run for the whole experiment
         run_name = f"{model_name}__{fname}"
