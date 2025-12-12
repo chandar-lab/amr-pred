@@ -2,12 +2,18 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from collections import Counter
 from Bio import SeqIO
-from sklearn.kernel_approximation import svd
+from multiprocessing import Pool
+import psutil
 from tqdm import tqdm
 import logging
 import gc
 import pickle
 import os
+
+try:
+    NUM_PROC = len(psutil.Process().cpu_affinity())
+except AttributeError:
+    NUM_PROC = os.cpu_count()
 
 from features.utils import efficient_svd
 
@@ -203,34 +209,67 @@ class KmerFeatures:
         
         return data, rows, cols
 
+    def _process_single_sequence(self, args):
+        """
+        Standalone worker function so it can be pickled by multiprocessing.
+        Returns: (row_idx, {col_idx: value})
+        """
+        (row_idx, entry, mode, selected_kmers, kmer_to_col, extract_func) = args
+
+        kmers = extract_func(entry['seq'])
+        filtered = [k for k in kmers if k in selected_kmers]
+        if not filtered:
+            return row_idx, {}  # empty row
+
+        # build statistic depending on mode
+        if mode == "binary":
+            kmer_dict = {k: 1 for k in set(filtered)}
+        elif mode == "count":
+            kmer_dict = Counter(filtered)
+        elif mode == "entropy":
+            kmer_dict = Counter(filtered)
+            total = sum(kmer_dict.values())
+            if total > 0:
+                kmer_dict = {k: v / total for k, v in kmer_dict.items()}
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        # convert to column-indexed dictionary
+        col_dict = {kmer_to_col[k]: val for k, val in kmer_dict.items()}
+        return row_idx, col_dict
+
+
+
     def _process_sequence_batch_dense(self, batch, start_row_idx):
-        """Process a batch of sequences for dense matrix representation."""
+        """Parallel version using multiprocessing."""
+        n_rows = len(batch)
         n_cols = len(self.kmer_to_col)
-        batch_matrix = np.zeros((len(batch), n_cols), dtype=self._get_dtype())
-        
-        for batch_idx, entry in enumerate(batch):
-            kmers = self._extract_kmers_from_file(entry['seq'])
-            
-            # Filter k-mers to only include selected ones
-            filtered_kmers = [kmer for kmer in kmers if kmer in self.selected_kmers]
-            
-            if not filtered_kmers:
-                continue
-                
-            if self.mode == "binary":
-                kmer_dict = {k: 1 for k in set(filtered_kmers)}
-            elif self.mode == "count":
-                kmer_dict = Counter(filtered_kmers)
-            elif self.mode == "entropy":
-                kmer_dict = Counter(filtered_kmers)
-                total_count = sum(kmer_dict.values())
-                if total_count > 0:
-                    kmer_dict = {k: v / total_count for k, v in kmer_dict.items()}
-            
-            for kmer, val in kmer_dict.items():
-                col_idx = self.kmer_to_col[kmer]
-                batch_matrix[batch_idx, col_idx] = val
-        
+        batch_matrix = np.zeros((n_rows, n_cols), dtype=self._get_dtype())
+
+        # Prepare args for workers
+        worker_args = [
+            (
+                i,
+                entry,
+                self.mode,
+                self.selected_kmers,
+                self.kmer_to_col,
+                self._extract_kmers_from_file
+            )
+            for i, entry in enumerate(batch)
+        ]
+
+        # Process using a pool + tqdm
+        with Pool(processes=NUM_PROC) as pool:
+            for row_idx, col_dict in tqdm(
+                pool.imap_unordered(self._process_single_sequence, worker_args),
+                total=len(worker_args),
+                desc=f"Processing dense batch ({NUM_PROC} processes)",
+            ):
+                # Fill row
+                for col_idx, val in col_dict.items():
+                    batch_matrix[row_idx, col_idx] = val
+
         return batch_matrix
 
     def _get_dtype(self):
@@ -300,7 +339,7 @@ class KmerFeatures:
         if self.use_sparse:
             X, y = self._build_sparse_matrix(dataset)
         else:
-            X, y = self._build_dense_matrix(dataset)
+            X, y = self._build_dense_matrix(dataset) # Returned X is or
         
         # --- NEW: Save the newly built matrix as a 'full' matrix for future runs ---
         if self.path_full_matrix:
