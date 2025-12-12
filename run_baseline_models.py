@@ -197,6 +197,18 @@ def main(cfg: DictConfig):
         logger.info("Only building the feature matrix ...")
         # Build the feature matrix and save it
         kmer_features.build_feature_matrix(dataset=dataset_list)
+
+        # save kmers for this size
+        save_fname_kmers = f"kmers_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl"
+        path_out_kmers = os.path.join(path_species, "models", save_fname_kmers)
+        # Use the kmer_features to get kmer names
+        kmers_columns = kmer_features.get_feature_names() # K-mer feature names in the order of the feature matrix columns
+        # Build a dict of kmer: count when the count starts at max_features and decrements to 1
+        kmer_counts_dict = {kmer: count for kmer, count in zip(kmers_columns, range(max_features, 0, -1))}
+        logger.info(f"Saving the k-mers used in the model to {path_out_kmers} ...")
+        # Save the truncated kmer features dict
+        with open(path_out_kmers, "wb") as f:
+            pickle.dump(kmer_counts_dict, f)
         # logger.info(f"Feature matrix saved at {kmer_features.path_full_matrix}")
         return
     
@@ -311,7 +323,7 @@ def main(cfg: DictConfig):
         os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
         
         # save the best model
-        save_fname_model = f"model_{cfg.model.name}__{fname}.pkl"
+        save_fname_model = f"model_{model_name}__{fname}.pkl"
         path_out_model = os.path.join(path_species, "models", save_fname_model)
         logger.info(f"Saving the best model to {path_out_model} ...")
         joblib.dump(best_model, path_out_model)
@@ -319,15 +331,14 @@ def main(cfg: DictConfig):
         # save kmers for this size
         save_fname_kmers = f"kmers_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl"
         path_out_kmers = os.path.join(path_species, "models", save_fname_kmers)
-        # Load the pickle file for frequent k-mers and truncate it's size to match the model
-        with open(kmer_features.path_kmers, "rb") as f:
-            kmer_counts_dict = pickle.load(f)
-        # Create a list of k-mers sorted by their frequencies (descending)
-        kmer_counts_sorted = sorted(kmer_counts_dict.items(), key=lambda x: x[1], reverse=True)
-        kmer_counts_dict_truncated = dict(kmer_counts_sorted[:max_features])
+        # Use the kmer_features to get kmer names
+        kmers_columns = kmer_features.get_feature_names() # K-mer feature names in the order of the feature matrix columns
+        # Build a dict of kmer: count when the count starts at max_features and decrements to 1
+        kmer_counts_dict = {kmer: count for kmer, count in zip(kmers_columns, range(max_features, 0, -1))}
+        logger.info(f"Saving the k-mers used in the model to {path_out_kmers} ...")
         # Save the truncated kmer features dict
         with open(path_out_kmers, "wb") as f:
-            pickle.dump(kmer_counts_dict_truncated, f)
+            pickle.dump(kmer_counts_dict, f)
 
 
         # initialize a single wandb run for the whole experiment
@@ -356,7 +367,7 @@ def main(cfg: DictConfig):
                 for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
                     preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
             preds_df = pd.DataFrame(preds_rows)
-            preds_path = os.path.join(path_species, "results", f"preds_{cfg.model.name}__{fname}.csv")
+            preds_path = os.path.join(path_species, "results", f"preds_{model_name}__{fname}.csv")
             preds_df.to_csv(preds_path, index=False)
             logger.info(f"Per-fold predictions saved to {preds_path}")
 
@@ -366,7 +377,7 @@ def main(cfg: DictConfig):
                 for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
                     preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
             preds_df = pd.DataFrame(preds_rows)
-            preds_path = os.path.join(path_species, "results", f"preds_{cfg.model.name}__{fname}.csv")
+            preds_path = os.path.join(path_species, "results", f"preds_{model_name}__{fname}.csv")
             preds_df.to_csv(preds_path, index=False)
             logger.info(f"Per-fold predictions saved to {preds_path}")
 

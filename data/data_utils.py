@@ -18,6 +18,7 @@ LABEL_MAPPING = {
 }
 
 def load_data(path_data_csv, path_root_fna):
+    ''' Returns a list of dicts with keys: 'seq' (path to .fna file), 'label' (0/1), 'assembly' (assembly id)'''
 
     df_data = pd.read_csv(path_data_csv)
     specie_drug_assemblies = df_data['Assembly'].tolist()
