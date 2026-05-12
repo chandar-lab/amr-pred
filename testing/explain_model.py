@@ -78,7 +78,7 @@ def main():
     
     # Plot results
     logging.info("Generating SHAP summary plot ...")
-    plot_path = os.path.join(path_out, "figures",
+    plot_path = os.path.join(path_out, "shap",
                              f"shap_summary_{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_{fmat_size}.png")
 
     # Create the figures directory if it doesn't exist
@@ -106,6 +106,20 @@ def main():
         kmer = explanation.feature_names[idx]
         shap_value = shap_values_mean[idx]
         logging.info(f"K-mer: {kmer}, Mean |SHAP value|: {shap_value:.6f}")
+    
+    logging.info("Saving k-mers and their mean |SHAP| values to CSV ...")
+    shap_df = pd.DataFrame({
+        "kmer": explanation.feature_names,
+        "mean_abs_shap_value": shap_values_mean
+    })
+    # Sort by mean_abs_shap_value descending
+    shap_df = shap_df.sort_values(by="mean_abs_shap_value", ascending=False)
+    shap_df = shap_df[shap_df["mean_abs_shap_value"] > 0]  # Keep only k-mers with non-zero SHAP values
+    
+    # Make output directory if it doesn't exist
+    csv_path = os.path.join(path_out, "shap", f"shap_values_{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_{fmat_size}.csv")
+    shap_df.to_csv(csv_path, index=False)
+    logging.info(f"Saved SHAP values to {csv_path}")
     
     logging.info("Done.")
 

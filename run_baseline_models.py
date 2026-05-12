@@ -46,7 +46,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
 
         if config.matrix.reduce_dimensionality == "fit_svd":
             logger.info("Reducing dimensionality of feature matrix using efficient SVD...")
-            X_train, X_test = train_val_svd(X_train, X_test)
+            X_train, X_test = train_val_svd(X_train, X_test, k=163)
 
         
         current_model = clone(estimator)
@@ -62,7 +62,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             # Clean up wandb state for the next fold's sweep
             wandb.teardown()
         else:
-             logger.info(f"Training {modelname} in fold {fold_idx+1} with fixed parameters.")
+            logger.info(f"Training {modelname} in fold {fold_idx+1} with fixed parameters.")
 
         # Fit the best model (from sweep) or the standard model on the full training set for the fold
         current_model.fit(X_train, y_train)
@@ -113,6 +113,22 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
 
         logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f} - Time: {time.process_time() - start:.2f}s")
 
+    # --- Train final model on the full dataset, for testing on alternate datasets ---
+    current_model = clone(estimator)
+    if use_sweeps:
+            logger.info(f"Running sweep for full dataset...")
+            sweep_id = wandb.sweep(sweep_config, project=config.wandb.project)
+            trainer = WandbFoldTrainer(current_model, fixed_run_config, X, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
+            wandb.agent(sweep_id, function=trainer, count=config.wandb.sweep_runs_per_fold)
+            
+            logger.info(f"Best parameters on full data: {trainer.best_params}")
+            current_model = trainer.best_model # Get the best model from the sweep
+            # Clean up wandb state for the next fold's sweep
+            wandb.teardown()
+    else:
+        logger.info(f"Training {modelname} on full dataset with fixed parameters.")
+    full_train_model = current_model.fit(X, pheno)
+
     # --- After all folds, create a summary and log to the main wandb run ---
     logger.info("CV finished. Logging summary results to W&B...")
     
@@ -135,7 +151,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         # "best_fold_accuracy": best_overall_score
     }
     
-    return summary_stats, best_classification_report, results_df, best_model, predictions_per_fold
+    return summary_stats, best_classification_report, results_df, full_train_model, predictions_per_fold
 
 
 # config_path is a directory relative to this file (run_baseline_models.py)
@@ -163,10 +179,11 @@ def main(cfg: DictConfig):
     min_kmer_freq = 2   # filters out extremely rare k-mers that don't appear at least twice
     k = cfg.matrix.k
     feature_mode = cfg.matrix.feat_mode
-    max_features = cfg.matrix.max_features
+    max_features = None if cfg.matrix.max_features == "None" else int(cfg.matrix.max_features)
+    
 
     patho_short = f"{pathogen.split('_')[0][0]}_{pathogen.split('_')[1]}"
-    feat = f"{(max_features//1000)}K"
+    feat =  "full" if max_features is None else f"{(max_features//1000)}K"
     fname = f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__split_{split}__feat_{feat}"
 
     logger.info(f"Training on {pathogen} for {antibiotic} using k-mers of length {k} ...")
@@ -189,7 +206,7 @@ def main(cfg: DictConfig):
         use_canonical=True,
         use_sparse=cfg.dataset.use_sparse,                            # Use sparse matrix for k-mer features
         reduce_dimensionality=(cfg.matrix.reduce_dimensionality == "leaky_svd"),                  # Whether to reduce dimensionality with SVD
-        path_full_matrix=os.path.join(path_species, "feature_matrices", f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_10M.npz"),
+        path_full_matrix=os.path.join(path_species, "feature_matrices", f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_{'10M' if max_features is not None else 'full'}{'__sparse' if cfg.dataset.use_sparse else ''}.npz"),
         path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.pkl"),
     )
     
@@ -252,7 +269,7 @@ def main(cfg: DictConfig):
             "model_name": model_name,
             "pathogen": cfg.dataset.pathogen, "antibiotic": cfg.dataset.antibiotic,
             "pathogen_short": patho_short, "k": cfg.matrix.k,
-            "feat_mode": cfg.matrix.feat_mode, "max_features": f"{cfg.matrix.max_features//1000}K",
+            "feat_mode": cfg.matrix.feat_mode, "max_features": feat,
             "use_sparse": cfg.dataset.use_sparse, "seed": cfg.seed, 
             "split_method": split, "clustering": cfg.clustering_method,
         }
@@ -312,7 +329,7 @@ def main(cfg: DictConfig):
         model = hydra.utils.instantiate(cfg.model.params)
 
         logger.info(f"Training {model.__class__.__name__} model...")
-        summary_stats, best_classification_report, fold_results_df, best_model, predictions = fitmodel_nestedcv(
+        summary_stats, best_classification_report, fold_results_df, full_train_model, predictions = fitmodel_nestedcv(
             X, y, cv_splits, model, config=cfg, 
             use_sweeps=use_sweeps, 
             sweep_config=sweep_config,
@@ -326,7 +343,7 @@ def main(cfg: DictConfig):
         save_fname_model = f"model_{model_name}__{fname}.pkl"
         path_out_model = os.path.join(path_species, "models", save_fname_model)
         logger.info(f"Saving the best model to {path_out_model} ...")
-        joblib.dump(best_model, path_out_model)
+        joblib.dump(full_train_model, path_out_model)
 
         # save kmers for this size
         save_fname_kmers = f"kmers_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl"
@@ -334,7 +351,8 @@ def main(cfg: DictConfig):
         # Use the kmer_features to get kmer names
         kmers_columns = kmer_features.get_feature_names() # K-mer feature names in the order of the feature matrix columns
         # Build a dict of kmer: count when the count starts at max_features and decrements to 1
-        kmer_counts_dict = {kmer: count for kmer, count in zip(kmers_columns, range(max_features, 0, -1))}
+        num_kmers = X.shape[1] if max_features is None else max_features
+        kmer_counts_dict = {kmer: count for kmer, count in zip(kmers_columns, range(num_kmers, 0, -1))}
         logger.info(f"Saving the k-mers used in the model to {path_out_kmers} ...")
         # Save the truncated kmer features dict
         with open(path_out_kmers, "wb") as f:
@@ -352,34 +370,24 @@ def main(cfg: DictConfig):
             run.log(summary_stats)
             run.log({"fold_results": wandb.Table(dataframe=fold_results_df)})
 
-            # Create the output results directory
-            os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
+        # Create the output results directory
+        os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
 
-            # Save the results to a CSV file
-            save_fname = f"results_{run_name}"
-            path_out = os.path.join(path_species, "results", save_fname)
-            # results_df = pd.DataFrame(results)
-            fold_results_df.to_csv(f"{path_out}.csv", index=False)
-            
-            # Also save per-fold predictions (y_true, y_pred) so downstream metrics can be computed easily
-            preds_rows = []
-            for p in predictions:
-                for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
-                    preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
-            preds_df = pd.DataFrame(preds_rows)
-            preds_path = os.path.join(path_species, "results", f"preds_{model_name}__{fname}.csv")
-            preds_df.to_csv(preds_path, index=False)
-            logger.info(f"Per-fold predictions saved to {preds_path}")
-
-            # Also save per-fold predictions (y_true, y_pred) so downstream metrics can be computed easily
-            preds_rows = []
-            for p in predictions:
-                for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
-                    preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
-            preds_df = pd.DataFrame(preds_rows)
-            preds_path = os.path.join(path_species, "results", f"preds_{model_name}__{fname}.csv")
-            preds_df.to_csv(preds_path, index=False)
-            logger.info(f"Per-fold predictions saved to {preds_path}")
+        # Save the results to a CSV file
+        save_fname = f"results_{run_name}"
+        path_out = os.path.join(path_species, "results", save_fname)
+        # results_df = pd.DataFrame(results)
+        fold_results_df.to_csv(f"{path_out}.csv", index=False)
+        
+        # Also save per-fold predictions (y_true, y_pred) so downstream metrics can be computed easily
+        preds_rows = []
+        for p in predictions:
+            for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
+                preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
+        preds_df = pd.DataFrame(preds_rows)
+        preds_path = os.path.join(path_species, "results", f"preds_{model_name}__{fname}.csv")
+        preds_df.to_csv(preds_path, index=False)
+        logger.info(f"Per-fold predictions saved to {preds_path}")
 
         
 

@@ -178,36 +178,49 @@ class KmerFeatures:
             return self._process_sequence_batch_dense(batch, start_row_idx)
 
     def _process_sequence_batch_sparse(self, batch, start_row_idx):
-        """Process a batch of sequences for sparse matrix representation."""
+        """
+        Parallel sparse processing using the same _process_single_sequence
+        worker function as the dense version.
+        Returns: (data, rows, cols)
+        """
+
         data, rows, cols = [], [], []
-        
-        for batch_idx, entry in enumerate(batch):
-            row_idx = start_row_idx + batch_idx
-            kmers = self._extract_kmers_from_file(entry['seq'])
-            
-            # Filter k-mers to only include selected ones
-            filtered_kmers = [kmer for kmer in kmers if kmer in self.selected_kmers]
-            
-            if not filtered_kmers:
-                continue
-                
-            if self.mode == "binary":
-                kmer_dict = {k: 1 for k in set(filtered_kmers)}
-            elif self.mode == "count":
-                kmer_dict = Counter(filtered_kmers)
-            elif self.mode == "entropy":
-                kmer_dict = Counter(filtered_kmers)
-                total_count = sum(kmer_dict.values())
-                if total_count > 0:
-                    kmer_dict = {k: v / total_count for k, v in kmer_dict.items()}
-            
-            for kmer, val in kmer_dict.items():
-                col_idx = self.kmer_to_col[kmer]
-                rows.append(row_idx)
-                cols.append(col_idx)
-                data.append(val)
-        
+
+        # Prepare args for workers — note: row_idx is relative,
+        # so we still add start_row_idx after
+        worker_args = [
+            (
+                i,                      # relative row index
+                entry,
+                self.mode,
+                self.selected_kmers,
+                self.kmer_to_col,
+                self._extract_kmers_from_file
+            )
+            for i, entry in enumerate(batch)
+        ]
+
+        # Process in parallel
+        with Pool(processes=NUM_PROC) as pool:
+            for rel_row_idx, col_dict in tqdm(
+                pool.imap_unordered(self._process_single_sequence, worker_args),
+                total=len(worker_args),
+                desc=f"Processing sparse batch ({NUM_PROC} processes)",
+            ):
+                if not col_dict:
+                    continue  # skip empty rows
+
+                # Convert relative index → absolute index
+                abs_row_idx = start_row_idx + rel_row_idx
+
+                # Append all sparse entries
+                for col_idx, val in col_dict.items():
+                    rows.append(abs_row_idx)
+                    cols.append(col_idx)
+                    data.append(val)
+
         return data, rows, cols
+
 
     def _process_single_sequence(self, args):
         """
