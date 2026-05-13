@@ -4,6 +4,7 @@ import logging
 import random
 import joblib
 import wandb
+import gc
 import hydra
 import pandas as pd
 import pickle
@@ -21,7 +22,7 @@ from features.utils import plot_umap, efficient_svd, train_val_svd
 from data.data_utils import load_data
 from data.generate_phylogeny_folds import get_genomic_folds
 from training.train_utils import compute_major_errors
-from training.wandb_utils import WandbFoldTrainer
+from training.sweep_utils import OptunaFoldTrainer
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -52,15 +53,18 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         current_model = clone(estimator)
 
         if use_sweeps:
-            logger.info(f"Running sweep for fold {fold_idx+1}...")
-            sweep_id = wandb.sweep(sweep_config, project=config.wandb.project)
-            trainer = WandbFoldTrainer(current_model, fixed_run_config, X_train, y_train, fold_idx)
-            wandb.agent(sweep_id, function=trainer, count=config.wandb.sweep_runs_per_fold)
+            logger.info(f"Running Optuna sweep for fold {fold_idx+1}...")
+            trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X_train, y_train, fold_idx)
+            trainer.optimize(
+                n_trials=config.wandb.sweep_runs_per_fold,
+                study_name=f"{sweep_config['name']}__fold_{fold_idx+1}",
+            )
             
-            logger.info(f"Best parameters in fold {fold_idx+1}: {trainer.best_params}")
+            logger.info(
+                f"Best parameters in fold {fold_idx+1}: {trainer.best_params} "
+                f"(val_balanced_accuracy={trainer.best_val_acc:.3f}, trial={trainer.best_trial_number})"
+            )
             current_model = trainer.best_model # Get the best model from the sweep
-            # Clean up wandb state for the next fold's sweep
-            wandb.teardown()
         else:
             logger.info(f"Training {modelname} in fold {fold_idx+1} with fixed parameters.")
 
@@ -109,25 +113,39 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         if score > best_overall_score:
             best_overall_score = score
             best_classification_report = classification_report(y_test, y_pred, digits=4)
-            best_model = current_model
+            # best_model = current_model
 
         logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f} - Time: {time.process_time() - start:.2f}s")
+        
+        # Free memory at the end of the fold
+        del X_train, X_test, y_train, y_test, current_model, y_pred, y_probs
+        if use_sweeps and 'trainer' in locals():
+            del trainer
+        gc.collect()
 
     # --- Train final model on the full dataset, for testing on alternate datasets ---
     current_model = clone(estimator)
     if use_sweeps:
-            logger.info(f"Running sweep for full dataset...")
-            sweep_id = wandb.sweep(sweep_config, project=config.wandb.project)
-            trainer = WandbFoldTrainer(current_model, fixed_run_config, X, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
-            wandb.agent(sweep_id, function=trainer, count=config.wandb.sweep_runs_per_fold)
+            logger.info(f"Running Optuna sweep for full dataset...")
+            trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
+            trainer.optimize(
+                n_trials=config.wandb.sweep_runs_per_fold,
+                study_name=f"{sweep_config['name']}__full",
+            )
             
-            logger.info(f"Best parameters on full data: {trainer.best_params}")
+            logger.info(
+                f"Best parameters on full data: {trainer.best_params} "
+                f"(val_balanced_accuracy={trainer.best_val_acc:.3f}, trial={trainer.best_trial_number})"
+            )
             current_model = trainer.best_model # Get the best model from the sweep
-            # Clean up wandb state for the next fold's sweep
-            wandb.teardown()
     else:
         logger.info(f"Training {modelname} on full dataset with fixed parameters.")
     full_train_model = current_model.fit(X, pheno)
+
+    # Free up memory after final training    
+    if use_sweeps and 'trainer' in locals():
+        del trainer
+    gc.collect()
 
     # --- After all folds, create a summary and log to the main wandb run ---
     logger.info("CV finished. Logging summary results to W&B...")
@@ -328,13 +346,25 @@ def main(cfg: DictConfig):
         # --- Train Model ---
         model = hydra.utils.instantiate(cfg.model.params)
 
-        logger.info(f"Training {model.__class__.__name__} model...")
-        summary_stats, best_classification_report, fold_results_df, full_train_model, predictions = fitmodel_nestedcv(
-            X, y, cv_splits, model, config=cfg, 
-            use_sweeps=use_sweeps, 
-            sweep_config=sweep_config,
-            fixed_run_config=fixed_config
-        )
+        # initialize a single wandb run for the whole experiment
+        run_name = f"{model_name}__{fname}"
+        with wandb.init(
+            project=cfg.wandb.project, name=run_name, 
+            config=fixed_config, tags=["summary", "baseline", "cv"]
+            ) as run:
+
+            logger.info(f"Training {model.__class__.__name__} model...")
+            summary_stats, best_classification_report, fold_results_df, full_train_model, predictions = fitmodel_nestedcv(
+                X, y, cv_splits, model, config=cfg, 
+                use_sweeps=use_sweeps, 
+                sweep_config=sweep_config,
+                fixed_run_config=fixed_config
+            )
+
+            logger.info("Logging summary results to W&B...")
+            run.log(summary_stats)
+            run.log({"fold_results": wandb.Table(dataframe=fold_results_df)})
+
         # ensure target dirs exist
         os.makedirs(os.path.join(path_species, "models"), exist_ok=True)
         os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
@@ -357,18 +387,6 @@ def main(cfg: DictConfig):
         # Save the truncated kmer features dict
         with open(path_out_kmers, "wb") as f:
             pickle.dump(kmer_counts_dict, f)
-
-
-        # initialize a single wandb run for the whole experiment
-        run_name = f"{model_name}__{fname}"
-        with wandb.init(
-            project=cfg.wandb.project, name=run_name, 
-            config=fixed_config, tags=["summary", "baseline", "cv"]
-            ) as run:
-
-            logger.info("Logging summary results to W&B...")
-            run.log(summary_stats)
-            run.log({"fold_results": wandb.Table(dataframe=fold_results_df)})
 
         # Create the output results directory
         os.makedirs(os.path.join(path_species, "results"), exist_ok=True)

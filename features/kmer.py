@@ -313,7 +313,9 @@ class KmerFeatures:
                 logging.info(f"Sub-sampling to top {self.max_features} features from {n_features_full} total features.")
                 
                 # Columns are already ordered by k-mer frequency, so we can slice directly
-                X_sub = X_full[:, :self.max_features]
+                X_sub = X_full[:, :self.max_features].copy()
+                del X_full
+                gc.collect()
                 
                 # Update the k-mer map to reflect the sub-sampling
                 col_to_kmer_full = {v: k for k, v in self.kmer_to_col.items()}
@@ -361,7 +363,7 @@ class KmerFeatures:
         
         if self.reduce_dim:
             logging.info("Applying dimensionality reduction using SVD...")
-            _, _, X_reduced = efficient_svd(X_full)
+            _, _, X_reduced = efficient_svd(X)
             return X_reduced, y
             
         return X, y

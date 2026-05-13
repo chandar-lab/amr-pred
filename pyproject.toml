@@ -12,6 +12,7 @@ dependencies = [
     "hydra-submitit-launcher>=1.2.0",
     "loguru>=0.7.3",
     "matplotlib>=3.10.3",
+    "optuna>=4.4.0",
     "pandas>=2.3.1",
     "pyani-plus>=0.0.1",
     "scikit-learn>=1.7.0",

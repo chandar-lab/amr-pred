@@ -28,7 +28,8 @@ def efficient_svd(X, k=150):
 
     # 3. Estimate projections of mean onto components
     mean_proj = mu @ components.T  # shape: (k,)
-    X_proj_centered = X_proj - mean_proj  # simulate centering
+    X_proj -= mean_proj  # simulate centering in-place to save memory
+    X_proj_centered = X_proj
 
     # 4. Compute explained variance (simulate covariance matrix on centered X)
     explained_variance = np.sum(X_proj_centered**2, axis=0) / (n_samples - 1)
@@ -64,12 +65,11 @@ def train_val_svd(X_train, X_val, k=150):
     # Determine correction factor for train matrix
     mu = np.asarray(X_train.mean(axis=0)).ravel()
     mean_proj = mu @ components.T
-    X_train_proj_centered = X_train_proj - mean_proj
+    
+    X_train_proj -= mean_proj
+    X_val_proj -= mean_proj
 
-    # Correct validation matrix
-    X_val_proj_centered = X_val_proj - mean_proj
-
-    return X_train_proj_centered, X_val_proj_centered
+    return X_train_proj, X_val_proj
 
 # import umap
 # def plot_umap(X, y, metric='cosine', title=None, save_path=None):
