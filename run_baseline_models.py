@@ -21,26 +21,34 @@ from features.kmer import KmerFeatures
 from features.utils import plot_umap, efficient_svd, train_val_svd
 from data.data_utils import load_data
 from data.generate_phylogeny_folds import get_genomic_folds
-from training.train_utils import compute_major_errors
+from training.train_utils import compute_major_errors, load_fold_checkpoint, save_fold_checkpoint
 from training.sweep_utils import OptunaFoldTrainer
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 
-def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, sweep_config=None, fixed_run_config=None):
+def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, sweep_config=None, fixed_run_config=None, checkpoint_dir=None):
     modelname = config.model.name if not config.matrix.reduce_dimensionality else f"{config.model.name}_{config.matrix.reduce_dimensionality}"
     modelname += f"_sub{int(config.matrix.subsample_frac*100)}" if config.matrix.subsample_frac < 1.0 else ""
     
     logger.info(f"Starting {config.num_folds}-Fold CV for {modelname}...")
 
-    fold_raws = []
     fold_results = []
     predictions_per_fold = []            # <-- store y_true / y_pred per fold
     best_overall_score = -1
     best_classification_report = ""
 
     for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
+        if checkpoint_dir:
+            checkpoint = load_fold_checkpoint(checkpoint_dir, fold_idx)
+            if checkpoint is not None:
+                result_record, prediction_record = checkpoint
+                fold_results.append(result_record)
+                predictions_per_fold.append(prediction_record)
+                logger.info(f"Fold {fold_idx+1} checkpoint found; loading saved results and skipping training.")
+                continue
+
         start = time.process_time()
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = pheno[train_idx], pheno[test_idx]
@@ -86,14 +94,16 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             except Exception:
                 return list(arr)
 
-        predictions_per_fold.append({
+        prediction_record = {
             "fold": fold_idx,
-            "indices": list(test_idx),
+            "indices": _to_pylist(test_idx),
             "y_true": _to_pylist(y_test),
-            "y_pred": _to_pylist(y_pred)
-        })
+            "y_pred": _to_pylist(y_pred),
+            "y_prob": _to_pylist(y_probs) if y_probs is not None else None,
+        }
+        predictions_per_fold.append(prediction_record)
 
-        fold_results.append({
+        result_record = {
             "model_name": modelname, "pathogen": fixed_run_config['pathogen'],
             "pathogen_short": fixed_run_config['pathogen_short'],
             "antibiotic": fixed_run_config['antibiotic'], 
@@ -108,7 +118,11 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             "very_major_error": vme,
             "major_error": me,
             "fold_time": time.process_time() - start
-        })
+        }
+        fold_results.append(result_record)
+        if checkpoint_dir:
+            checkpoint_path = save_fold_checkpoint(checkpoint_dir, fold_idx, result_record, prediction_record)
+            logger.info(f"Fold {fold_idx+1} checkpoint saved to {checkpoint_path}.")
         
         if score > best_overall_score:
             best_overall_score = score
@@ -151,8 +165,9 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     logger.info("CV finished. Logging summary results to W&B...")
     
     # Create a pandas DataFrame for easy calculation and table logging
+    fold_results = sorted(fold_results, key=lambda row: int(row["fold"]))
+    predictions_per_fold = sorted(predictions_per_fold, key=lambda row: int(row["fold"]))
     results_df = pd.DataFrame(fold_results)
-    raws_df = pd.DataFrame(fold_raws)
     
     # Calculate and log summary statistics
     summary_stats = {
@@ -224,7 +239,7 @@ def main(cfg: DictConfig):
         use_canonical=True,
         use_sparse=cfg.dataset.use_sparse,                            # Use sparse matrix for k-mer features
         reduce_dimensionality=(cfg.matrix.reduce_dimensionality == "leaky_svd"),                  # Whether to reduce dimensionality with SVD
-        path_full_matrix=os.path.join(path_species, "feature_matrices", f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_{'10M' if max_features is not None else 'full'}{'__sparse' if cfg.dataset.use_sparse else ''}.npz"),
+        path_full_matrix=os.path.join(path_species, "feature_matrices", f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__feat_{'10M' if max_features is not None and not (cfg.dataset.use_sparse) else 'full'}{'__sparse' if cfg.dataset.use_sparse else ''}.npz"),
         path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.pkl"),
     )
     
@@ -348,6 +363,7 @@ def main(cfg: DictConfig):
 
         # initialize a single wandb run for the whole experiment
         run_name = f"{model_name}__{fname}"
+        checkpoint_dir = os.path.join(path_species, "results", "checkpoints", run_name)
         with wandb.init(
             project=cfg.wandb.project, name=run_name, 
             config=fixed_config, tags=["summary", "baseline", "cv"]
@@ -358,7 +374,8 @@ def main(cfg: DictConfig):
                 X, y, cv_splits, model, config=cfg, 
                 use_sweeps=use_sweeps, 
                 sweep_config=sweep_config,
-                fixed_run_config=fixed_config
+                fixed_run_config=fixed_config,
+                checkpoint_dir=checkpoint_dir,
             )
 
             logger.info("Logging summary results to W&B...")
@@ -400,8 +417,8 @@ def main(cfg: DictConfig):
         # Also save per-fold predictions (y_true, y_pred) so downstream metrics can be computed easily
         preds_rows = []
         for p in predictions:
-            for idx, y_t, y_p in zip(p["indices"], p["y_true"], p["y_pred"]):
-                preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p})
+            for idx, y_t, y_p, y_prob in zip(p["indices"], p["y_true"], p["y_pred"], p["y_prob"]):
+                preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p, "y_prob": y_prob})
         preds_df = pd.DataFrame(preds_rows)
         preds_path = os.path.join(path_species, "results", f"preds_{model_name}__{fname}.csv")
         preds_df.to_csv(preds_path, index=False)

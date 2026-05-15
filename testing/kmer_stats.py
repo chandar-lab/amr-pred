@@ -100,6 +100,9 @@ def main():
     max_kmer_freq = X_test.max()
     logging.info("Maximum k-mer frequency observed in feature matrix: %.4f", max_kmer_freq)
 
+    # Print the datatype of the feature matrix
+    logging.info("Data type of feature matrix: %s", X_test.dtype)
+
 if __name__ == "__main__":
     main()
 
