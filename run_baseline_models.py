@@ -218,6 +218,9 @@ def main(cfg: DictConfig):
     patho_short = f"{pathogen.split('_')[0][0]}_{pathogen.split('_')[1]}"
     feat =  "full" if max_features is None else f"{(max_features//1000)}K"
     fname = f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}__split_{split}__feat_{feat}"
+    if not cfg.wandb.use_sweeps:
+        fname += f"__no_sweep"
+
 
     logger.info(f"Training on {pathogen} for {antibiotic} using k-mers of length {k} ...")
 
