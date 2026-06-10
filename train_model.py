@@ -185,7 +185,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     return summary_stats, best_classification_report, results_df, full_train_model, predictions_per_fold
 
 
-# config_path is a directory relative to this file (run_baseline_models.py)
+# config_path is a directory relative to this file (train_model.py)
 @hydra.main(config_path="config", config_name="main", version_base=None)
 def main(cfg: DictConfig):
     random.seed(cfg.seed)
