@@ -1,6 +1,6 @@
 """
-Script to run inference on a trained model and evaluate its performance on a test dataset.
-Saves predictions and evaluation metrics to specified output directory.
+Script to generate interpretability explanations for a trained model using SHAP values.
+Saves SHAP summary plots and CSV files with k-mers and their mean absolute SHAP values to specified output directory.
 
 Usage:
     PYTHONPATH=<path_to_repository> python testing/explain_model.py \

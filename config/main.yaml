@@ -10,8 +10,14 @@ debug: False
 num_folds: 5
 
 # Primary directories where the data is stored
-path_assemblies_root: "../amr_genomic_data" # FOR NAGA: Use "/home/mila/n/naga-karthik.enamundram/scratch/amr_genomic_data"
-path_datasets_reinterpreted: "./datasets" # FOR NAGA: Use "/home/mila/n/naga-karthik.enamundram/genomicFMs/ncbi_resistance_phenotypes_asts/datasets_reinterpreted"
+# The default values assume that your directory structure looks like this:
+# amr/
+# ├── amr-pred/
+#     ├── config/
+# ├── datasets/
+# amr_genomic_data/
+path_assemblies_root: "../amr_genomic_data"
+path_datasets_reinterpreted: "./datasets" 
 
 # output directory for caching the feature matrix and kmers
 path_out_cache: "./datasets"
@@ -32,11 +38,14 @@ use_genomic_splits: True # If False, will use random splits
 split_method: "dashing" #Options: "dashing", "mash", "ani". Only used if use_genomic_splits is True
 clustering_method: "hierarchical" #Options: "hierarchical", "unordered". Only used if use_genomic_splits is True
 
+# Arguments for sweeps
+use_sweeps: True
+sweep_runs_per_fold: 25
+
+
 wandb:
   project: "amr-baselines"
   entity: "aselstyne"
-  use_sweeps: True
-  sweep_runs_per_fold: 25
   mode: "online" # Set to "offline" to disable logging
 
 hydra:

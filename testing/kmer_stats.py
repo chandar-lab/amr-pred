@@ -1,4 +1,4 @@
-''' Generate statistics on k-mer matrices and FASTA files. 
+''' Generate statistics on k-mer matrices and FASTA files in the dataset.
 
 Usage follows other scripts in this repository:
 Usage:

@@ -180,8 +180,6 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         "mean_fold_time": results_df['fold_time'].mean(),
         "fda_me_passed": bool(results_df['major_error'].mean() < 0.03),
         "fda_vme_passed": bool(results_df['very_major_error'].mean() < 0.015),
-        # "best_classification_report": best_classification_report,
-        # "best_fold_accuracy": best_overall_score
     }
     
     return summary_stats, best_classification_report, results_df, full_train_model, predictions_per_fold
@@ -282,18 +280,6 @@ def main(cfg: DictConfig):
 
         logger.info(f"Feature matrix shape: {X.shape}")
         logger.info(f"Number of samples: {X.shape[0]}")
-
-        if cfg.debug:
-            # plot UMAP of the feature matrix with different metrics
-            # metrics = ["jaccard", "rogerstanimoto", "euclidean", "canberra", "cosine"]
-            metrics = ["jaccard", "cosine"]
-            for metric in metrics:
-                logger.info(f"Plotting UMAP with metric: {metric}")
-                start_time = time.time()
-                plot_umap(X, y, metric=metric,
-                        title=f"UMAP of feature matrix; K: {k}; Mode: {feature_mode}; Metric: {metric}", 
-                        save_path=os.path.join(output_dir, f"umap__{fname}__{metric}.png"))
-                logger.info(f"UMAP plot for {metric} completed in {time.time() - start_time:.2f} seconds")
 
         
         # Determine if we are running sweeps based on hydra config

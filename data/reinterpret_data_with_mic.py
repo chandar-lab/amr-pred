@@ -40,12 +40,12 @@ def get_parser():
         default="ncbi_raw/isolates.tsv",
         help="Path to the isolates file downloaded from https://www.ncbi.nlm.nih.gov/pathogens/isolates",   
     )
-    parser.add_argument(
-        "--path-out",
-        type=str,
-        default="datasets",
-        help="Path to the output directory where the individual pathogen-antiobiotic datasets will be saved",
-    )
+    # parser.add_argument(
+    #     "--path-out",
+    #     type=str,
+    #     default="datasets",
+    #     help="Path to the output directory where the individual pathogen-antiobiotic datasets will be saved",
+    # )
     parser.add_argument(
         "--save-plots",
         action="store_true",
@@ -75,14 +75,14 @@ def clean_ecoli_data(df):
 
     return df
 
-
-def main():
+@hydra.main(config_path="../config", config_name="main", version_base=None)
+def main(cfg: DictConfig):
     parser = get_parser()
     args = parser.parse_args()
 
     # create the output directory if it doesn't exist
-    if not os.path.exists(args.path_out):
-        os.makedirs(args.path_out, exist_ok=True)
+    if not os.path.exists(cfg.path_datasets_reinterpreted):
+        os.makedirs(cfg.path_datasets_reinterpreted, exist_ok=True)
 
     # get the organism name from the path_data
     organism = os.path.basename(os.path.dirname(args.path_data))
