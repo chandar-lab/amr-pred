@@ -56,7 +56,7 @@ pip install -e .
   * This script requires three command line arguments to run, as well as hydra config information from `config/main.yaml`. It processes one species per run, so the following arguments must be passed: `--path-clsi-bps` (the location of the CLSI breakpoints file), `--path-data` (the path to the .csv file downloaded from the NCBI for the target species), and `--path-isolates`, the path to the .tsv file downloaded from the NCBI. `path_datasets_reinterpreted` from the hydra config is used as the output of the script.
 * Run `data/download_dataset.py` to download the raw genomic sequences from the NCBI database. Before running this script, make sure that `ncbi_datasets` python package is installed. See installation instructions [here](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/).
   * Although this script takes a species-antibiotic combination as input via the hydra config, it will download all sequences for the given species. 
-  * To change the target species, use `--run dataset=<difficulty>/<dataset_name>` when running the script.
+  * To change the target species, use `--run dataset=<difficulty>/<dataset_name>` when running the script, using on the files in the `config/dataset` directory.
 
 
 #### Step 2: Training a Model

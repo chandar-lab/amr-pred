@@ -17,7 +17,7 @@ from tqdm import tqdm
 # import argparse
 from loguru import logger
 import glob
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 
 # def parse_args():

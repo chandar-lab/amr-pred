@@ -8,6 +8,9 @@ Script for preprocessing the NCBI ASTs dataset. The script does the following:
 3. Store the individual species-antibiotic dataset combination in a separate CSV file for training.
 """
 
+import hydra
+from omegaconf import DictConfig
+import sys
 import pandas as pd
 import numpy as np
 import os
@@ -75,10 +78,13 @@ def clean_ecoli_data(df):
 
     return df
 
+parser = get_parser()
+args, remaining = parser.parse_known_args()
+# Leave only the arguments that argparse did not consume
+sys.argv = [sys.argv[0]] + remaining
+
 @hydra.main(config_path="../config", config_name="main", version_base=None)
 def main(cfg: DictConfig):
-    parser = get_parser()
-    args = parser.parse_args()
 
     # create the output directory if it doesn't exist
     if not os.path.exists(cfg.path_datasets_reinterpreted):
@@ -99,7 +105,7 @@ def main(cfg: DictConfig):
     stream_handler.setLevel(logging.INFO)
     stream_handler.setFormatter(formatter)
     # Ensure log directory exists
-    log_dir = os.path.join(args.path_out, organism, "filtered")
+    log_dir = os.path.join(cfg.path_datasets_reinterpreted, organism, "filtered")
     os.makedirs(log_dir, exist_ok=True)
 
     # Create file handler
@@ -288,7 +294,7 @@ def main(cfg: DictConfig):
             num_susceptible_before += len(df_new[df_new['Resistance phenotype'] == 'susceptible'])
 
             # save the filtered dataframe
-            output_path = os.path.join(args.path_out, organism, 'filtered', f"{organism}__{drug}_SR_filt.csv")
+            output_path = os.path.join(cfg.path_datasets_reinterpreted, organism, 'filtered', f"{organism}__{drug}_SR_filt.csv")
             if not os.path.exists(output_path):
                 # create the directory for saving the filtered data if it doesn't exist
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -346,7 +352,7 @@ def main(cfg: DictConfig):
             logger.info(f"No drugs with S/R genomes found for {organism}")
         else:
             if args.save_plots:
-                save_path = os.path.join(args.path_out, organism, "filtered", "plots_single_species")
+                save_path = os.path.join(cfg.path_datasets_reinterpreted, organism, "filtered", "plots_single_species")
                 # create the directory for saving the plots if it doesn't exist
                 if not os.path.exists(save_path):
                     os.makedirs(save_path, exist_ok=True)

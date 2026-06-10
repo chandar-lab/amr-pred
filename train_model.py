@@ -238,7 +238,7 @@ def main(cfg: DictConfig):
         batch_size=256,                                         # Smaller batches for memory efficiency
         use_canonical=True,
         use_sparse=cfg.dataset.use_sparse,                      # Use sparse matrix for k-mer features
-        reduce_dimensionality=False                             # This is the "leaky" SVD that acts on both train and test, so it's not currently used.
+        reduce_dimensionality=False,                            # This is the "leaky" SVD that acts on both train and test, so it's not currently used.
         path_full_matrix=os.path.join(path_species, "feature_matrices", f"{fname}__feat_{'10M' if max_features is not None and not (cfg.dataset.use_sparse) else 'full'}{'__sparse' if cfg.dataset.use_sparse else ''}.npz"),
         path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.pkl"),
     )
