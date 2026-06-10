@@ -25,18 +25,18 @@ path_out_cache: "./datasets"
 # feature matrix parameters
 matrix:
   k: 31
-  feat_mode: "count"
-  max_features: 1_000_000
-  reduce_dimensionality: False # Options are: False, "leaky_svd" (SVD on the whole data matrix), "fit_svd" (fit SVD only on train set, transform test set)
-  subsample_frac: 1.0 # FOR EXPERIMENTS! Fraction of genomes to use when building the feature matrix. Use 1.0 for all genomes (default)
+  feat_mode: "count"              # Can be set to either "binary" (presence/absence) or "count"
+  max_features: 1_000_000         # Set to "None" to use all features. WARNING: This can be extremely memory intensive!
+  reduce_dimensionality: False    # True/False, to use the SVD-based dimensionality reduction.
+  subsample_frac: 1.0             # Fraction of genomes to use when building the feature matrix. Use 1.0 for all genomes (default)
 
 # argument to build the feature matrix only
 build_only: False
 
 # Arguments for the genomic distance based splits
-use_genomic_splits: True # If False, will use random splits
-split_method: "dashing" #Options: "dashing", "mash", "ani". Only used if use_genomic_splits is True
-clustering_method: "hierarchical" #Options: "hierarchical", "unordered". Only used if use_genomic_splits is True
+use_genomic_splits: True          # If False, will use random splits
+split_method: "dashing"           # Options: "dashing", "mash", "ani". Only used if use_genomic_splits is True
+clustering_method: "hierarchical" # Options: "hierarchical", "unordered". Only used if use_genomic_splits is True
 
 # Arguments for sweeps
 use_sweeps: True
@@ -46,7 +46,7 @@ sweep_runs_per_fold: 25
 wandb:
   project: "amr-baselines"
   entity: "aselstyne"
-  mode: "online" # Set to "offline" to disable logging
+  mode: "online"                  # Set to "offline" to disable logging
 
 hydra:
   # Logging configuration: https://hydra.cc/docs/tutorials/basic/running_your_app/logging/

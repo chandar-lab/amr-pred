@@ -294,7 +294,7 @@ class KmerFeatures:
         else:
             return np.float32
 
-    def build_feature_matrix(self, dataset):
+    def build_feature_matrix(self, dataset): 
         """
         Build feature matrix with a priority system:
         1. Load and sub-sample from a full matrix if available.
