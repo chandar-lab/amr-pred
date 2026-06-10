@@ -1,15 +1,47 @@
 """
 Script containing utility functions for data preprocessing and visualization
 """
-
+import os
+import glob
+import logging
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
 # global parameters
 FONTSIZE = 12
-MIN_SAMPLES_PER_CLASS = 50  # arbitrary number; used because this is what bMx does internally
+LABEL_MAPPING = {
+    # NOTE: convention is to use 0 for susceptible and 1 for resistant
+    "resistant": 1,
+    "susceptible": 0
+}
 
+def load_data(path_data_csv, path_root_fna):
+    ''' Returns a list of dicts with keys: 'seq' (path to .fna file), 'label' (0/1), 'assembly' (assembly id)'''
+
+    df_data = pd.read_csv(path_data_csv)
+    specie_drug_assemblies = df_data['Assembly'].tolist()
+    # get the corresponding phenotypic labels for each assembly
+    phenotypes = df_data['Phenotype_revised'].tolist()
+    # print(phenotypes)
+
+    dataset_list = []
+    for assembly, phenotype in zip(specie_drug_assemblies, phenotypes):
+        temp_dict = {}
+        # if assembly not in dataset_dict:
+        fname = glob.glob(os.path.join(path_root_fna, assembly, "ncbi_dataset", "data", assembly, "*.fna"))
+        if len(fname) == 0:
+            logging.info(f"WARNING: No .fna file found for assembly {assembly}. Skipping this entry.")
+            continue
+
+        temp_dict["seq"] = fname[0] 
+        temp_dict["label"] = LABEL_MAPPING[phenotype]
+        temp_dict["assembly"] = assembly # ADDED FOR PHYLOGENY-BASED SPLITS
+        dataset_list.append(temp_dict)
+    
+    return dataset_list
+    
 
 def plot_antibiotic_counts(antibiotic_dict, organism, save_path):
     # This function plots barplots for each specie, showing the counts of resistant and susceptible genomes for each antibiotic
@@ -40,7 +72,7 @@ def plot_antibiotic_counts(antibiotic_dict, organism, save_path):
     plt.xlabel("Antibiotic", fontsize=FONTSIZE+3)
     plt.yticks(fontsize=FONTSIZE)
     plt.xticks(rotation=90, fontsize=FONTSIZE)
-    plt.title(f"Genome Counts for {organism} (Log Scale); Threshold: {MIN_SAMPLES_PER_CLASS} genomes per class")
+    plt.title(f"Genome Counts for {organism} (Log Scale)")
     plt.tight_layout()
 
     organism = organism.replace(" ", "_").lower()
@@ -136,3 +168,68 @@ def get_drugs_for_organism_clsi(df, organism):
     drugs = df_filtered['drug'].unique().tolist()
     
     return drugs
+
+
+def get_folds_stats(folds, dist_table):
+    """
+    Print the minimum, maximum, and average distance between assemblies in each fold.
+    parameters:
+    - dist_table: pd.DataFrame, distance table with assemblies as index and columns
+    - folds: dict, mapping of assembly names to fold numbers
+    """
+    fold_stats = {}
+    for fold in set(folds.values()):
+        # Get the assemblies in the current fold
+        fold_assemblies = [assembly for assembly, f in folds.items() if f == fold]
+        # Get all the assemblies in the other folds
+        other_assemblies = [assembly for assembly, f in folds.items() if f != fold]
+        # Get the distance matrix for the current fold
+        fold_distances = dist_table.loc[fold_assemblies, fold_assemblies].values
+        # Calculate the minimum, maximum, and average distance
+        min_distance = np.min(fold_distances)
+        max_distance = np.max(fold_distances)
+        avg_distance = np.mean(fold_distances)
+        fold_stats[fold] = {
+            'intra_min': min_distance,
+            'intra_max': max_distance,
+            'intra_avg': avg_distance
+        }
+        # Calculate the minimum, maximum and average distance to the other folds
+        other_distances = dist_table.loc[fold_assemblies, other_assemblies].values
+        if other_distances.size > 0:  # Check if there are any distances
+            min_distance_other = np.min(other_distances)
+            max_distance_other = np.max(other_distances)
+            avg_distance_other = np.mean(other_distances)
+            fold_stats[fold].update({
+                'inter_min': min_distance_other,
+                'inter_max': max_distance_other,
+                'inter_avg': avg_distance_other
+            })
+        else:
+            fold_stats[fold].update({
+                'inter_min': None,
+                'inter_max': None,
+                'inter_avg': None
+            })
+
+    # Create a matrix with minimum distances between each pair of folds
+    fold_distance_matrix = pd.DataFrame(index=fold_stats.keys(), columns=fold_stats.keys())
+    for fold1 in fold_stats.keys():
+        for fold2 in fold_stats.keys():
+            if fold1 == fold2:
+                fold_distance_matrix.loc[fold1, fold2] = 0.0
+            else:
+                # Get the assemblies in the current folds
+                fold1_assemblies = [assembly for assembly, f in folds.items() if f == fold1]
+                fold2_assemblies = [assembly for assembly, f in folds.items() if f == fold2]
+                # Get the distance matrix for the current folds
+                distances = dist_table.loc[fold1_assemblies, fold2_assemblies].values
+                if distances.size > 0:
+                    # Calculate the minimum distance between the two folds
+                    min_distance = np.min(distances)
+                    fold_distance_matrix.loc[fold1, fold2] = min_distance
+                else:
+                    fold_distance_matrix.loc[fold1, fold2] = None
+
+    return fold_stats, fold_distance_matrix
+

@@ -1,0 +1,32 @@
+# Full list of kwargs:
+# https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html
+
+name: "RFC"
+
+params:
+  _target_: sklearn.ensemble.RandomForestClassifier
+  n_jobs: -1  # Use all available CPU cores
+  criterion: gini
+  random_state: ${seed}
+  class_weight: balanced
+  # Default settings for the model before the sweep
+  n_estimators: 100
+  min_samples_split: 2
+  min_samples_leaf: 1
+  max_features: sqrt
+
+# Define hyperparameters for the sweep
+sweep:
+  method: bayes
+  metric:
+    name: val_balanced_accuracy
+    goal: maximize
+  parameters:
+    n_estimators:
+      values: [100, 300, 500]
+    max_features:
+      values: ['sqrt', 'log2', 0.1]
+    max_depth:
+      values: [None, 10, 30]
+    min_samples_leaf:
+      values: [1, 2, 4]

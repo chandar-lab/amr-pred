@@ -1,0 +1,12 @@
+# path to the fasta files
+path_dataroot: ${path_assemblies_root}/pseudomonas_aeruginosa/
+
+# path to the csv file
+path_csv: ${path_datasets_reinterpreted}/pseudomonas_aeruginosa/filtered
+
+# pathogen and antibiotic
+pathogen: "pseudomonas_aeruginosa"
+antibiotic: "aztreonam"
+
+# use sparse matrix or not
+use_sparse: False

@@ -1,0 +1,72 @@
+defaults:
+  - dataset: hard/p_aeruginosa__aztreonam
+  - model: xgboost
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
+  - _self_
+
+seed: 42
+debug: False
+num_folds: 5
+
+# Primary directories where the data is stored
+# The default values assume that your directory structure looks like this:
+# amr/
+# ├── amr-pred/
+#     ├── config/
+# ├── datasets/
+# amr_genomic_data/
+path_assemblies_root: "../amr_genomic_data"
+path_datasets_reinterpreted: "./datasets" 
+
+# output directory for caching the feature matrix and kmers
+path_out_cache: "./datasets"
+
+# feature matrix parameters
+matrix:
+  k: 31
+  feat_mode: "count"              # Can be set to either "binary" (presence/absence) or "count"
+  max_features: 1_000_000         # Set to "None" to use all features. WARNING: This can be extremely memory intensive!
+  reduce_dimensionality: False    # True/False, to use the SVD-based dimensionality reduction.
+  subsample_frac: 1.0             # Fraction of genomes to use when building the feature matrix. Use 1.0 for all genomes (default)
+
+# argument to build the feature matrix only
+build_only: False
+
+# Arguments for the genomic distance based splits
+use_genomic_splits: True          # If False, will use random splits
+split_method: "dashing"           # Options: "dashing", "mash", "ani". Only used if use_genomic_splits is True
+clustering_method: "hierarchical" # Options: "hierarchical", "unordered". Only used if use_genomic_splits is True
+
+# Arguments for sweeps
+use_sweeps: True
+sweep_runs_per_fold: 25
+
+
+wandb:
+  project: "amr-baselines"
+  entity: "aselstyne"
+  mode: "online"                  # Set to "offline" to disable logging
+
+hydra:
+  # Logging configuration: https://hydra.cc/docs/tutorials/basic/running_your_app/logging/
+  verbose: False
+  # Logs to stdout and to a file.
+  job_logging:
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: colorlog
+        stream: ext://sys.stdout
+      file:
+        class: logging.FileHandler
+        formatter: simple
+        filename: ${hydra.runtime.output_dir}/${hydra.job.name}.log # Saves to a file in the run directory
+        # filename: ${hydra.runtime.output_dir}/${hydra.job.name}_${oc.select:hydra.job.num, 0}.log
+  # Set the output directory to /tmp to dump logs.
+  run:
+    dir: ./results/${now:%Y%m%d}/${now:%H%M%S}
+    # dir: /tmp/hydra/logs/${hydra.job.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ./results/${now:%Y%m%d}/${now:%H%M%S}
+    subdir: ${hydra.job.num}

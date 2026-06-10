@@ -1,0 +1,12 @@
+# path to the fasta files
+path_dataroot: ${path_assemblies_root}/acinetobacter_baumannii/
+
+# path to the csv file
+path_csv: ${path_datasets_reinterpreted}/acinetobacter_baumannii/filtered
+
+# pathogen and antibiotic
+pathogen: "acinetobacter_baumannii"
+antibiotic: "ceftazidime"
+
+# use sparse matrix or not
+use_sparse: False

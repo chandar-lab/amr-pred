@@ -2,16 +2,25 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from collections import Counter
 from Bio import SeqIO
+from multiprocessing import Pool
+import psutil
 from tqdm import tqdm
 import logging
 import gc
 import pickle
+import os
 
+try:
+    NUM_PROC = len(psutil.Process().cpu_affinity())
+except AttributeError:
+    NUM_PROC = os.cpu_count()
+
+from features.utils import efficient_svd
 
 class KmerFeatures:
-    def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False, 
-                 min_kmer_freq=2, use_canonical=True, batch_size=500, max_features=None, use_sparse=False, 
-                 path_kmers=None):
+    def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False,
+                 min_kmer_freq=2, use_canonical=True, batch_size=500, max_features=None, use_sparse=False,
+                 path_kmers=None, path_full_matrix=None):
         """
         Memory-efficient k-mer feature extraction with advanced feature selection.
         
@@ -26,6 +35,7 @@ class KmerFeatures:
         - max_features: int, maximum number of features to keep (most frequent)
         - use_sparse: bool, use sparse CSR matrix (True) or dense numpy arrays (False)
         - path_kmers: str, path to precomputed frequent k-mers dict (pkl file)
+        - path_full_matrix: str, path to a large, precomputed matrix for sub-sampling
         """
         assert mode in ("binary", "count", "entropy", "svd"), "Mode must be one of: 'binary', 'count', 'entropy', 'svd'"
 
@@ -34,7 +44,7 @@ class KmerFeatures:
         self.k = k
         self.mode = mode
         self.kmer_to_col = {}
-        self.path_precomputed = path_precomputed
+        # self.path_precomputed = path_precomputed
         self.reduce_dim = reduce_dimensionality
         self.min_kmer_freq = min_kmer_freq
         self.use_canonical = use_canonical
@@ -42,6 +52,13 @@ class KmerFeatures:
         self.max_features = max_features
         self.use_sparse = use_sparse
         self.path_kmers = path_kmers
+        self.path_full_matrix = path_full_matrix
+
+        # Check if the parent directory of the kmers exists, and create it if not
+        if self.path_kmers:
+            if not os.path.exists(os.path.dirname(self.path_kmers)):
+                os.makedirs(os.path.dirname(self.path_kmers))
+                logging.info(f"Created directory {os.path.dirname(self.path_kmers)} for storing kmers.")
 
         # For two-pass approach
         self.kmer_global_counts = Counter()
@@ -72,7 +89,9 @@ class KmerFeatures:
         return kmers
 
     def _count_global_kmers(self, dataset):
-        """First pass: count all k-mers globally for initial filtering."""
+        """First pass: count all k-mers globally for initial filtering.
+        
+        Only called when a pre-computed matrix is not available."""
 
         # Check if precomputed frequent k-mers are available
         if self.path_kmers:
@@ -88,17 +107,24 @@ class KmerFeatures:
             # Compute frequent k-mers from scratch
             frequent_kmers = self._compute_kmers(dataset)
         
+        # "frequent-kmers" contains kmer: total-count after min frequency filtering
         # Initial selection based on frequency (if max_features specified)
         if self.max_features and len(frequent_kmers) > self.max_features:
+            # Sort so frequent k-mers are first
             sorted_kmers = sorted(frequent_kmers.items(), key=lambda x: x[1], reverse=True)
+            # Select top N
             selected_kmers_with_counts = sorted_kmers[:self.max_features]
+            # Drop the counts, keep only k-mers
             self.selected_kmers = {kmer for kmer, _ in selected_kmers_with_counts}
             logging.info(f"Pre-selected top {self.max_features} most frequent k-mers")
         else:
+            # This will get sorted in the next step; order does not matter here
             self.selected_kmers = set(frequent_kmers.keys())
         
         # Create initial k-mer to column mapping
-        self.kmer_to_col = {kmer: idx for idx, kmer in enumerate(sorted(self.selected_kmers))}
+        # The sort ensures that column 0 is the most frequent k-mer, 1 is the second, and so on.
+        sorted_frequent_kmers = sorted(self.selected_kmers, key=lambda kmer: frequent_kmers.get(kmer, 0), reverse=True)
+        self.kmer_to_col = {kmer: idx for idx, kmer in enumerate(sorted_frequent_kmers)}
         
         logging.info(f"Initial feature set: {len(self.kmer_to_col)} k-mers")
         
@@ -107,12 +133,14 @@ class KmerFeatures:
         gc.collect()
 
     def _compute_kmers(self, dataset):
-        """Compute frequent k-mers from dataset and optionally save to file."""
+        """Compute frequent k-mers from dataset and optionally save to file.
+        
+        If saved, it will be to a pickle of k-mer: total-count dictionary. This is not in sorted order"""
         logging.info("Computing k-mer frequencies from dataset...")
         
         for i, entry in enumerate(tqdm(dataset, desc="Counting k-mers")):
-            kmers = self._extract_kmers_from_file(entry['seq'])
-            self.kmer_global_counts.update(kmers)
+            kmers = self._extract_kmers_from_file(entry['seq']) # List of all kmers in order of appearance
+            self.kmer_global_counts.update(kmers) # Counter object; counts all kmers across the dataset
             
             if i % 100 == 0:
                 gc.collect()    # Periodically clear memory
@@ -120,8 +148,7 @@ class KmerFeatures:
         logging.info(f"Found {len(self.kmer_global_counts)} unique k-mers")
         
         # Filter by minimum frequency
-        frequent_kmers = {kmer: count for kmer, count in self.kmer_global_counts.items() 
-                         if count > self.min_kmer_freq}
+        frequent_kmers = {kmer: count for kmer, count in self.kmer_global_counts.items() if count >= self.min_kmer_freq}
         
         logging.info(f"After frequency filtering (min_freq={self.min_kmer_freq}): {len(frequent_kmers)} k-mers")
         
@@ -151,65 +178,111 @@ class KmerFeatures:
             return self._process_sequence_batch_dense(batch, start_row_idx)
 
     def _process_sequence_batch_sparse(self, batch, start_row_idx):
-        """Process a batch of sequences for sparse matrix representation."""
+        """
+        Parallel sparse processing using the same _process_single_sequence
+        worker function as the dense version.
+        Returns: (data, rows, cols)
+        """
+
         data, rows, cols = [], [], []
-        
-        for batch_idx, entry in enumerate(batch):
-            row_idx = start_row_idx + batch_idx
-            kmers = self._extract_kmers_from_file(entry['seq'])
-            
-            # Filter k-mers to only include selected ones
-            filtered_kmers = [kmer for kmer in kmers if kmer in self.selected_kmers]
-            
-            if not filtered_kmers:
-                continue
-                
-            if self.mode == "binary":
-                kmer_dict = {k: 1 for k in set(filtered_kmers)}
-            elif self.mode == "count":
-                kmer_dict = Counter(filtered_kmers)
-            elif self.mode == "entropy":
-                kmer_dict = Counter(filtered_kmers)
-                total_count = sum(kmer_dict.values())
-                if total_count > 0:
-                    kmer_dict = {k: v / total_count for k, v in kmer_dict.items()}
-            
-            for kmer, val in kmer_dict.items():
-                col_idx = self.kmer_to_col[kmer]
-                rows.append(row_idx)
-                cols.append(col_idx)
-                data.append(val)
-        
+
+        # Prepare args for workers — note: row_idx is relative,
+        # so we still add start_row_idx after
+        worker_args = [
+            (
+                i,                      # relative row index
+                entry,
+                self.mode,
+                self.selected_kmers,
+                self.kmer_to_col,
+                self._extract_kmers_from_file
+            )
+            for i, entry in enumerate(batch)
+        ]
+
+        # Process in parallel
+        with Pool(processes=NUM_PROC) as pool:
+            for rel_row_idx, col_dict in tqdm(
+                pool.imap_unordered(self._process_single_sequence, worker_args),
+                total=len(worker_args),
+                desc=f"Processing sparse batch ({NUM_PROC} processes)",
+            ):
+                if not col_dict:
+                    continue  # skip empty rows
+
+                # Convert relative index → absolute index
+                abs_row_idx = start_row_idx + rel_row_idx
+
+                # Append all sparse entries
+                for col_idx, val in col_dict.items():
+                    rows.append(abs_row_idx)
+                    cols.append(col_idx)
+                    data.append(val)
+
         return data, rows, cols
 
+
+    def _process_single_sequence(self, args):
+        """
+        Standalone worker function so it can be pickled by multiprocessing.
+        Returns: (row_idx, {col_idx: value})
+        """
+        (row_idx, entry, mode, selected_kmers, kmer_to_col, extract_func) = args
+
+        kmers = extract_func(entry['seq'])
+        filtered = [k for k in kmers if k in selected_kmers]
+        if not filtered:
+            return row_idx, {}  # empty row
+
+        # build statistic depending on mode
+        if mode == "binary":
+            kmer_dict = {k: 1 for k in set(filtered)}
+        elif mode == "count":
+            kmer_dict = Counter(filtered)
+        elif mode == "entropy":
+            kmer_dict = Counter(filtered)
+            total = sum(kmer_dict.values())
+            if total > 0:
+                kmer_dict = {k: v / total for k, v in kmer_dict.items()}
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        # convert to column-indexed dictionary
+        col_dict = {kmer_to_col[k]: val for k, val in kmer_dict.items()}
+        return row_idx, col_dict
+
+
+
     def _process_sequence_batch_dense(self, batch, start_row_idx):
-        """Process a batch of sequences for dense matrix representation."""
+        """Parallel version using multiprocessing."""
+        n_rows = len(batch)
         n_cols = len(self.kmer_to_col)
-        batch_matrix = np.zeros((len(batch), n_cols), dtype=self._get_dtype())
-        
-        for batch_idx, entry in enumerate(batch):
-            kmers = self._extract_kmers_from_file(entry['seq'])
-            
-            # Filter k-mers to only include selected ones
-            filtered_kmers = [kmer for kmer in kmers if kmer in self.selected_kmers]
-            
-            if not filtered_kmers:
-                continue
-                
-            if self.mode == "binary":
-                kmer_dict = {k: 1 for k in set(filtered_kmers)}
-            elif self.mode == "count":
-                kmer_dict = Counter(filtered_kmers)
-            elif self.mode == "entropy":
-                kmer_dict = Counter(filtered_kmers)
-                total_count = sum(kmer_dict.values())
-                if total_count > 0:
-                    kmer_dict = {k: v / total_count for k, v in kmer_dict.items()}
-            
-            for kmer, val in kmer_dict.items():
-                col_idx = self.kmer_to_col[kmer]
-                batch_matrix[batch_idx, col_idx] = val
-        
+        batch_matrix = np.zeros((n_rows, n_cols), dtype=self._get_dtype())
+
+        # Prepare args for workers
+        worker_args = [
+            (
+                i,
+                entry,
+                self.mode,
+                self.selected_kmers,
+                self.kmer_to_col,
+                self._extract_kmers_from_file
+            )
+            for i, entry in enumerate(batch)
+        ]
+
+        # Process using a pool + tqdm
+        with Pool(processes=NUM_PROC) as pool:
+            for row_idx, col_dict in tqdm(
+                pool.imap_unordered(self._process_single_sequence, worker_args),
+                total=len(worker_args),
+                desc=f"Processing dense batch ({NUM_PROC} processes)",
+            ):
+                # Fill row
+                for col_idx, val in col_dict.items():
+                    batch_matrix[row_idx, col_idx] = val
+
         return batch_matrix
 
     def _get_dtype(self):
@@ -221,14 +294,56 @@ class KmerFeatures:
         else:
             return np.float32
 
-    def build_feature_matrix(self, dataset):
-        """Build feature matrix with advanced feature selection."""
+    def build_feature_matrix(self, dataset): 
+        """
+        Build feature matrix with a priority system:
+        1. Load and sub-sample from a full matrix if available.
+        2. Load from a standard precomputed matrix.
+        3. Build from scratch and save the full matrix if a path is given.
+        """
         
-        if self.path_precomputed:
-            logging.info(f"Loading precomputed k-mer matrix from {self.path_precomputed}...")
-            X, y = self.load_matrix(self.path_precomputed)
-            return X, y
+        # --- NEW: Priority 1 - Load and sub-sample from a full matrix ---
+        if self.path_full_matrix and os.path.exists(self.path_full_matrix):
+            logging.info(f"Loading full feature matrix from {self.path_full_matrix} to sub-sample...")
+            X_full, y = self.load_matrix(self.path_full_matrix)  # This also loads the full kmer_to_col map
 
+            n_features_full = X_full.shape[1]
+            
+            if self.max_features and self.max_features < n_features_full:
+                logging.info(f"Sub-sampling to top {self.max_features} features from {n_features_full} total features.")
+                
+                # Columns are already ordered by k-mer frequency, so we can slice directly
+                X_sub = X_full[:, :self.max_features].copy()
+                del X_full
+                gc.collect()
+                
+                # Update the k-mer map to reflect the sub-sampling
+                col_to_kmer_full = {v: k for k, v in self.kmer_to_col.items()}
+                self.kmer_to_col = {col_to_kmer_full[i]: i for i in range(self.max_features)}
+                
+                logging.info(f"Sub-sampled matrix shape: {X_sub.shape}")
+                if self.reduce_dim:
+                    logging.info("Applying dimensionality reduction using SVD...")
+                    _, _, X_reduced = efficient_svd(X_sub)
+                    return X_reduced, y
+                return X_sub, y
+            else:
+                logging.info("Using the full pre-loaded matrix as max_features is not smaller.")
+                if self.reduce_dim:
+                    logging.info("Applying dimensionality reduction using SVD...")
+                    _, _, X_reduced = efficient_svd(X_full)
+                    return X_reduced, y
+                return X_full, y
+
+        # # --- EXISTING: Priority 2 - Load from standard precomputed file ---
+        # if self.path_precomputed:
+        #     logging.info(f"Loading precomputed k-mer matrix from {self.path_precomputed}...")
+        #     X, y = self.load_matrix(self.path_precomputed)
+        #     return X, y
+
+        # --- Fallback: Build matrix from scratch ---
+        logging.info("No precomputed matrix found, building from scratch...")
+        
         # Step 1: Count and filter k-mers
         self._count_global_kmers(dataset)
         
@@ -236,12 +351,22 @@ class KmerFeatures:
             raise ValueError("No k-mers passed the filtering criteria. Consider lowering min_kmer_freq.")
 
         # Step 2: Build feature matrix
-        labels = []
-        
         if self.use_sparse:
-            return self._build_sparse_matrix(dataset)
+            X, y = self._build_sparse_matrix(dataset)
         else:
-            return self._build_dense_matrix(dataset)
+            X, y = self._build_dense_matrix(dataset) # Returned X is or
+        
+        # --- NEW: Save the newly built matrix as a 'full' matrix for future runs ---
+        if self.path_full_matrix:
+            logging.info(f"Saving the newly built matrix to {self.path_full_matrix} for future use.")
+            self.save_matrix(X, y, self.path_full_matrix)
+        
+        if self.reduce_dim:
+            logging.info("Applying dimensionality reduction using SVD...")
+            _, _, X_reduced = efficient_svd(X)
+            return X_reduced, y
+            
+        return X, y
 
     def _build_sparse_matrix(self, dataset):
         """Build sparse CSR matrix."""
@@ -282,18 +407,24 @@ class KmerFeatures:
         if self.reduce_dim:
             logging.info("Applying dimensionality reduction using SVD...")
             from sklearn.decomposition import TruncatedSVD
-            n_components = min(min(X.shape) - 1, 1000)
+            n_components = 100 #min(min(X.shape) - 1, 1000)
             svd = TruncatedSVD(n_components=n_components, random_state=42)
-            X_reduced = svd.fit_transform(X)
-            logging.info(f"Reduced dimensions from {X.shape[1]} to {X_reduced.shape[1]}")
-            return X_reduced, y
+            # Fit to get the uncorrected verion, then apply correction for column means
+            X_uncorrected = svd.fit_transform(X)
+            V = svd.components_
+            # correct using column means; project each component onto the mean vector, then subtract
+            mu = np.asarray(X.mean(axis=0)).ravel()
+            mean_proj = mu @ V.T  # shape (n_components,)
+            X_corrected = X_uncorrected - mean_proj[None, :]
+            logging.info(f"Reduced dimensions from {X.shape[1]} to {X_corrected.shape[1]}")
+            return X_corrected, y
 
         return X, y
 
     def _build_dense_matrix(self, dataset):
         """Build dense numpy matrix."""
         n_rows = len(dataset)
-        n_cols = len(self.kmer_to_col)
+        n_cols = len(self.kmer_to_col) # kmer_to_col only includes as many columns as was specified
         
         logging.info(f"Building dense matrix: {n_rows} samples x {n_cols} features")
         
@@ -318,15 +449,6 @@ class KmerFeatures:
         logging.info(f"Final dense matrix shape: {X.shape}")
         logging.info(f"Memory usage: ~{X.nbytes / 1024**2:.1f} MB")
 
-        if self.reduce_dim:
-            logging.info("Applying dimensionality reduction using SVD...")
-            from sklearn.decomposition import TruncatedSVD
-            n_components = min(min(X.shape) - 1, 1000)
-            svd = TruncatedSVD(n_components=n_components, random_state=42)
-            X_reduced = svd.fit_transform(X)
-            logging.info(f"Reduced dimensions from {X.shape[1]} to {X_reduced.shape[1]}")
-            return X_reduced, y
-
         return X, y
 
     def get_feature_names(self):
@@ -338,30 +460,36 @@ class KmerFeatures:
     def save_matrix(self, X, y, filepath):
         """Save matrix (sparse or dense) and labels to file."""
         from scipy.sparse import issparse
+
+        # Check that the parent folder exists, and if not create it
+        parent_folder = os.path.dirname(filepath)
+        if parent_folder and not os.path.exists(parent_folder):
+            os.makedirs(parent_folder)
+            logging.info(f"Created directory {parent_folder} for saving the matrix.")
         
         if issparse(X):  # Sparse matrix
             logging.info(f"Saving sparse matrix ({X.format}) with shape {X.shape}")
             np.savez_compressed(filepath, 
-                              matrix_type='sparse',
-                              matrix_format=X.format,
-                              data=X.data, 
-                              indices=X.indices, 
-                              indptr=X.indptr, 
-                              shape=X.shape,
-                              dtype=str(X.dtype),
-                              labels=y,
-                              kmer_to_col=self.kmer_to_col,
-                              use_sparse=self.use_sparse)
+                                matrix_type='sparse',
+                                matrix_format=X.format,
+                                data=X.data, 
+                                indices=X.indices, 
+                                indptr=X.indptr, 
+                                shape=X.shape,
+                                dtype=str(X.dtype),
+                                labels=y,
+                                kmer_to_col=self.kmer_to_col,
+                                use_sparse=self.use_sparse)
         else:  # Dense matrix
             logging.info(f"Saving dense matrix with shape {X.shape}")
             np.savez_compressed(filepath, 
-                              matrix_type='dense',
-                              matrix=X, 
-                              labels=y,
-                              kmer_to_col=self.kmer_to_col,
-                              use_sparse=self.use_sparse)
+                                matrix_type='dense',
+                                matrix=X, 
+                                labels=y,
+                                kmer_to_col=self.kmer_to_col,
+                                use_sparse=self.use_sparse)
 
-        logging.info(f"Saved matrix and k-mer mapping to {filepath}")            
+        logging.info(f"Saved matrix and k-mer mapping to {filepath}")           
 
     def load_matrix(self, filepath):
         """Load matrix (sparse or dense), labels, and k-mer mapping from file."""
@@ -400,7 +528,7 @@ class KmerFeatures:
             saved_use_sparse = bool(data['use_sparse'])
             if saved_use_sparse != self.use_sparse:
                 logging.warning(f"Matrix was saved with use_sparse={saved_use_sparse}, "
-                              f"but current setting is use_sparse={self.use_sparse}")
+                                f"but current setting is use_sparse={self.use_sparse}")
         
         logging.info(f"Loaded matrix with shape {X.shape}")
         

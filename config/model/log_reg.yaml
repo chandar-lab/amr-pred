@@ -1,0 +1,35 @@
+# Full list of kwargs:
+# https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html
+name: "LGR"
+
+params:
+  _target_: sklearn.linear_model.LogisticRegression
+  # Default settings for the model before the sweep
+  penalty: l1
+  C: 1.0
+  solver: liblinear # Changed from lbfgs to a compatible solver
+  max_iter: 100
+  random_state: ${seed}
+  l1_ratio: 0.5 # Only used if penalty is 'elasticnet'
+  n_jobs: -1
+
+# Define hyperparameters for the sweep
+sweep:
+  method: bayes
+  metric:
+    name: val_balanced_accuracy
+    goal: maximize
+  parameters:
+    C:
+      # The range for the inverse of regularization strength
+      distribution: log_uniform_values
+      min: 0.001
+      max: 100.0
+    penalty:
+      # We are only using the l1 penalty for Lasso
+      values: ['l1', 'elasticnet']
+    solver:
+      # These are the solvers compatible with the l1 penalty
+      value: 'saga'
+    max_iter:
+      values: [300, 400, 500] # Added more options for convergence
