@@ -46,6 +46,14 @@ pip install -e .
 
 </details>
 
+<details>
+<summary>Generating phylogenetic folds</summary>
+
+In order to generate phylogenetic folds, you will have to download at least one of the following genomic distance tools:
+* dashing
+* mash
+</details>
+
 
 #### Step 1: Preprocessing
 
