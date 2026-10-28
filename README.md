@@ -49,9 +49,9 @@ pip install -e .
 <details>
 <summary>Generating phylogenetic folds</summary>
 
-In order to generate phylogenetic folds, you will have to download at least one of the following genomic distance tools:
-* dashing
-* mash
+In order to generate phylogenetic folds, you will have to download at least one of the following genomic distance tools. They are most easily installed using anaconda, so the recommended method is to create an `amr-utils` conda environment that is just used for genomic distance tools:
+* dashing: `conda install bioconda::dashing==0.4.0`
+* mash: `conda install bioconda::mash==2.1`
 </details>
 
 
