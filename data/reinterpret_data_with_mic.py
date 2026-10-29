@@ -264,8 +264,25 @@ def main(cfg: DictConfig):
                 continue
             
             # iterate through all the samples and classify them based on revised MIC values
+            bad_mic = {5.0, 25.0, 12.0}
+            n_bad_mic_kept, n_bad_mic_dropped = 0, 0
             indices_to_drop = []
             for i, (index, row) in enumerate(df_new.iterrows()):
+                if row['MIC (mg/L)'] in bad_mic: # THIS HAPPENS WHEN THE UPLOADER TO THE NCBI FORGOT A DECIMAL PLACE!
+                    # logger.info(f"Sample {row['#BioSample']} has MIC value {row['MIC (mg/L)']}, which is likely missing a decimal point. Using original label")
+                    if row['Resistance phenotype'] in ['resistant', 'susceptible']:
+                        df_new.at[index, 'Phenotype_revised'] = row['Resistance phenotype']
+                        # Fix the MIC_revised value to be what we consider the correct value based on whether the sample is resistant or susceptible
+                        if row['Resistance phenotype'] == 'susceptible' and not is_susceptible(row, bp_s):
+                            df_new.at[index, 'MIC_revised'] /= 100 # e.g. 25 --> 0.25
+                            if df_new.at[index, 'MIC_revised'] == 0.05: # Correct for the place value error with 5.0 --> 0.05, which should be 0.5
+                                df_new.at[index, 'MIC_revised'] = 0.5
+                        n_bad_mic_kept += 1
+                    else:
+                        # If the original label is not defined, we drop the sample
+                        indices_to_drop.append(index)
+                        n_bad_mic_dropped += 1
+                    continue
                 if is_resistant(row, bp_r):
                     df_new.at[index, 'Phenotype_revised'] = 'resistant'
                 elif is_susceptible(row, bp_s):
@@ -273,7 +290,13 @@ def main(cfg: DictConfig):
                 else:
                     # logger.info(f"Raw data show: '{row['Resistance phenotype']}' with {row['Measurement sign']} {row['MIC (mg/L)']} MIC (mg/L), but BP for {drug} is S: {bp_s}, R: {bp_r}. Dropping...")
                     indices_to_drop.append(index)
-            
+
+            if n_bad_mic_kept or n_bad_mic_dropped:
+                logger.info(
+                    f"{drug}: {n_bad_mic_kept + n_bad_mic_dropped} samples with non-dilution MIC "
+                    f"{sorted(bad_mic)} (likely lost decimal point): {n_bad_mic_kept} kept with the "
+                    f"original lab label, {n_bad_mic_dropped} dropped (no S/R lab label)")
+
             # Drop samples outside the loop
             if indices_to_drop:
                 df_new.drop(indices_to_drop, inplace=True)
