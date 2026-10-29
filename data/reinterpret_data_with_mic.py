@@ -285,7 +285,7 @@ def main(cfg: DictConfig):
 
             # Deduplicate assemblies: the same isolate can be tested on multiple AST platforms (e.g. Vitek, Microscan, Phoenix),
             # giving multiple rows per assembly. Assemblies with conflicting revised phenotypes are dropped,
-            # otherwise only the first row is kept.
+            # otherwise only the first row is kept. 
             num_phenotypes = df_new.groupby('Assembly')['Phenotype_revised'].transform('nunique')
             conflicting_assemblies = df_new.loc[num_phenotypes > 1, 'Assembly'].unique()
             num_rows_before_dedup = len(df_new)
