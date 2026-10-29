@@ -283,6 +283,18 @@ def main(cfg: DictConfig):
             if df_new['Phenotype_revised'].isna().any():
                 logger.info(f"Warning: There are {df_new['Phenotype_revised'].isna().sum()} samples with NaN phenotype for {drug}.")
 
+            # Deduplicate assemblies: the same isolate can be tested on multiple AST platforms (e.g. Vitek, Microscan, Phoenix),
+            # giving multiple rows per assembly. Assemblies with conflicting revised phenotypes are dropped,
+            # otherwise only the first row is kept.
+            num_phenotypes = df_new.groupby('Assembly')['Phenotype_revised'].transform('nunique')
+            conflicting_assemblies = df_new.loc[num_phenotypes > 1, 'Assembly'].unique()
+            num_rows_before_dedup = len(df_new)
+            df_new = df_new[num_phenotypes == 1]
+            df_new = df_new.drop_duplicates(subset=['Assembly'], keep='first')
+            num_dropped = num_rows_before_dedup - len(df_new)
+            if num_dropped > 0:
+                logger.info(f"{drug}: removed {num_dropped} duplicate rows, including {len(conflicting_assemblies)} assemblies dropped for conflicting phenotypes: {list(conflicting_assemblies)}")
+
             num_resistant = len(df_new[df_new['Phenotype_revised'] == 'resistant'])
             num_susceptible = len(df_new[df_new['Phenotype_revised'] == 'susceptible'])
             

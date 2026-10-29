@@ -9,6 +9,7 @@ import logging
 import gc
 import pickle
 import os
+import re
 
 try:
     NUM_PROC = len(psutil.Process().cpu_affinity())
@@ -16,6 +17,9 @@ except AttributeError:
     NUM_PROC = os.cpu_count()
 
 from features.utils import efficient_svd
+
+# Any run of characters other than A/C/G/T (N, or another IUPAC ambiguity code such as R, Y, K, M)
+NON_ACGT = re.compile(r"[^ACGT]+")
 
 class KmerFeatures:
     def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False,
@@ -77,15 +81,16 @@ class KmerFeatures:
         return min(kmer, rev_comp)
 
     def _extract_kmers_from_file(self, fna_path):
-        """Extract k-mers from FASTA file with memory-efficient streaming."""
+        """Extract k-mers from FASTA file with memory-efficient streaming.
+
+        Only k-mers made entirely of A/C/G/T are kept: any other character splits the
+        sequence into segments, and k-mers are taken within each segment."""
         kmers = []
         for record in SeqIO.parse(fna_path, "fasta"):
             seq = str(record.seq).upper()
-            for i in range(len(seq) - self.k + 1):
-                kmer = seq[i:i + self.k]
-                if "N" not in kmer:
-                    canonical_kmer = self._canonical_kmer(kmer)
-                    kmers.append(canonical_kmer)
+            for segment in NON_ACGT.split(seq):
+                for i in range(len(segment) - self.k + 1):
+                    kmers.append(self._canonical_kmer(segment[i:i + self.k]))
         return kmers
 
     def _count_global_kmers(self, dataset):
@@ -170,13 +175,6 @@ class KmerFeatures:
         except Exception as e:
             logging.warning(f"Failed to save frequent k-mers: {e}")
 
-    def _process_sequence_batch(self, batch, start_row_idx):
-        """Process a batch of sequences efficiently."""
-        if self.use_sparse:
-            return self._process_sequence_batch_sparse(batch, start_row_idx)
-        else:
-            return self._process_sequence_batch_dense(batch, start_row_idx)
-
     def _process_sequence_batch_sparse(self, batch, start_row_idx):
         """
         Parallel sparse processing using the same _process_single_sequence
@@ -253,11 +251,11 @@ class KmerFeatures:
 
 
 
-    def _process_sequence_batch_dense(self, batch, start_row_idx):
-        """Parallel version using multiprocessing."""
-        n_rows = len(batch)
-        n_cols = len(self.kmer_to_col)
-        batch_matrix = np.zeros((n_rows, n_cols), dtype=self._get_dtype())
+    def _process_sequence_batch_dense(self, batch, start_row_idx, X):
+        """Parallel version using multiprocessing. Fills the batch's rows of X in place.
+
+        Returns X, which is a widened copy if a count did not fit in X's dtype."""
+        value_dtype = np.float64 if self.mode == "entropy" else np.int64
 
         # Prepare args for workers
         worker_args = [
@@ -279,20 +277,39 @@ class KmerFeatures:
                 total=len(worker_args),
                 desc=f"Processing dense batch ({NUM_PROC} processes)",
             ):
-                # Fill row
-                for col_idx, val in col_dict.items():
-                    batch_matrix[row_idx, col_idx] = val
+                if not col_dict:
+                    continue  # skip empty rows
 
-        return batch_matrix
+                cols = np.fromiter(col_dict.keys(), dtype=np.int64, count=len(col_dict))
+                vals = np.fromiter(col_dict.values(), dtype=value_dtype, count=len(col_dict))
+
+                # Numpy wraps out-of-range integers silently, so check before writing the row
+                new_dtype = self._fit_dtype(X.dtype, vals.max())
+                if new_dtype != X.dtype:
+                    logging.warning(f"Count {int(vals.max())} does not fit in {X.dtype}; widening the feature matrix "
+                                    f"to {new_dtype} (copies {X.nbytes / 1024**3:.1f} GB)")
+                    X = X.astype(new_dtype)
+
+                X[start_row_idx + row_idx, cols] = vals
+
+        return X
 
     def _get_dtype(self):
-        """Get appropriate dtype based on mode."""
-        if self.mode == "binary":
+        """Get the initial dtype based on mode.
+
+        Integer matrices start as uint8 and are widened with _fit_dtype when a count does not
+        fit, so the final dtype is the smallest one that holds every value."""
+        if self.mode in ("binary", "count"):
             return np.uint8
-        elif self.mode == "count":
-            return np.uint16
         else:
             return np.float32
+
+    @staticmethod
+    def _fit_dtype(dtype, max_val):
+        """Return dtype if max_val fits in it, else the smallest unsigned integer dtype that holds max_val."""
+        if np.issubdtype(dtype, np.integer) and max_val > np.iinfo(dtype).max:
+            return np.min_scalar_type(int(max_val))
+        return np.dtype(dtype)
 
     def build_feature_matrix(self, dataset): 
         """
@@ -376,7 +393,7 @@ class KmerFeatures:
         logging.info("Building sparse feature matrix...")
         for i in tqdm(range(0, len(dataset), self.batch_size), desc="Processing batches"):
             batch = dataset[i:i + self.batch_size]
-            batch_data, batch_rows, batch_cols = self._process_sequence_batch(batch, i)
+            batch_data, batch_rows, batch_cols = self._process_sequence_batch_sparse(batch, i)
             
             all_data.extend(batch_data)
             all_rows.extend(batch_rows)
@@ -393,7 +410,9 @@ class KmerFeatures:
         
         logging.info(f"Building sparse matrix: {n_rows} samples x {n_cols} features")
         
-        X = csr_matrix((all_data, (all_rows, all_cols)), shape=(n_rows, n_cols), dtype=self._get_dtype())
+        dtype = self._fit_dtype(self._get_dtype(), max(all_data, default=0))
+        logging.info(f"Using dtype {dtype} for the sparse matrix")
+        X = csr_matrix((all_data, (all_rows, all_cols)), shape=(n_rows, n_cols), dtype=dtype)
         y = np.array(labels)
         
         # Clean up memory
@@ -434,10 +453,7 @@ class KmerFeatures:
         logging.info("Building dense feature matrix...")
         for i in tqdm(range(0, len(dataset), self.batch_size), desc="Processing batches"):
             batch = dataset[i:i + self.batch_size]
-            batch_matrix = self._process_sequence_batch(batch, i)
-            
-            end_idx = min(i + self.batch_size, n_rows)
-            X[i:end_idx] = batch_matrix
+            X = self._process_sequence_batch_dense(batch, i, X)
             
             labels.extend([entry['label'] for entry in batch])
             
@@ -446,7 +462,7 @@ class KmerFeatures:
 
         y = np.array(labels)
         
-        logging.info(f"Final dense matrix shape: {X.shape}")
+        logging.info(f"Final dense matrix shape: {X.shape}, dtype: {X.dtype}")
         logging.info(f"Memory usage: ~{X.nbytes / 1024**2:.1f} MB")
 
         return X, y
