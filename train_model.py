@@ -6,31 +6,48 @@ import joblib
 import wandb
 import gc
 import hydra
+import numpy as np
 import pandas as pd
 import pickle
 from omegaconf import DictConfig, OmegaConf
 
-import scipy.sparse as sp_sparse
 from sklearn.base import clone
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (
     balanced_accuracy_score, classification_report
 )
-from sklearn.feature_extraction.text import TfidfTransformer
 from features.kmer import KmerFeatures
-from features.utils import plot_umap, efficient_svd, train_val_svd
+from features.utils import plot_umap, efficient_svd, train_val_svd, compute_idf, apply_tfidf
 from data.data_utils import load_data
 from data.generate_phylogeny_folds import get_genomic_folds
-from training.train_utils import compute_major_errors, load_fold_checkpoint, save_fold_checkpoint
+from training.train_utils import compute_major_errors, load_fold_checkpoint, save_fold_checkpoint, FoldFeatures
 from training.sweep_utils import OptunaFoldTrainer
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 
-def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, sweep_config=None, fixed_run_config=None, checkpoint_dir=None):
+def save_model_kmers(kmer_features, path_models, patho_short, antibiotic, k, feat):
+    """Save the k-mers needed at inference: the k-mer groups for grouped runs, else the k-mer list."""
+    os.makedirs(path_models, exist_ok=True)
+    if kmer_features.group_columns:
+        # List in column order; each entry lists the column's member k-mers, representative first
+        payload = kmer_features.get_column_groups()
+        path_out_kmers = os.path.join(path_models, f"kmer_groups_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl")
+    else:
+        kmers_columns = kmer_features.get_feature_names() # K-mer feature names in the order of the feature matrix columns
+        # Build a dict of kmer: count when the count starts at the number of k-mers and decrements to 1
+        payload = {kmer: count for kmer, count in zip(kmers_columns, range(len(kmers_columns), 0, -1))}
+        path_out_kmers = os.path.join(path_models, f"kmers_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl")
+    logger.info(f"Saving the k-mers used in the model to {path_out_kmers} ...")
+    with open(path_out_kmers, "wb") as f:
+        pickle.dump(payload, f)
+
+
+def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, sweep_config=None, fixed_run_config=None, checkpoint_dir=None, fold_features=None):
     modelname = config.model.name if not config.matrix.reduce_dimensionality else f"{config.model.name}_svd"
     modelname += f"_sub{int(config.matrix.subsample_frac*100)}" if config.matrix.subsample_frac < 1.0 else ""
+    modelname += "_grp" if config.matrix.group_columns else ""
     
     logger.info(f"Starting {config.num_folds}-Fold CV for {modelname}...")
 
@@ -52,6 +69,11 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         start = time.process_time()
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = pheno[train_idx], pheno[test_idx]
+
+        if fold_features is not None:
+            # Group columns on the training rows only; test columns are group medians, as at inference
+            X_train, X_test = fold_features.fold(X_train, X_test)
+            logger.info(f"Fold {fold_idx+1}: {X_train.shape[1]:,} columns after grouping on the training rows")
 
         if config.matrix.reduce_dimensionality:
             logger.info("Reducing dimensionality of feature matrix using efficient SVD...")
@@ -138,10 +160,11 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         gc.collect()
 
     # --- Train final model on the full dataset, for testing on alternate datasets ---
+    X_full = fold_features.full(X) if fold_features is not None else X
     current_model = clone(estimator)
     if use_sweeps:
             logger.info(f"Running Optuna sweep for full dataset...")
-            trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
+            trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X_full, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
             trainer.optimize(
                 n_trials=config.sweep_runs_per_fold,
                 study_name=f"{sweep_config['name']}__full",
@@ -154,7 +177,8 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             current_model = trainer.best_model # Get the best model from the sweep
     else:
         logger.info(f"Training {modelname} on full dataset with fixed parameters.")
-    full_train_model = current_model.fit(X, pheno)
+    full_train_model = current_model.fit(X_full, pheno)
+    del X_full
 
     # Free up memory after final training    
     if use_sweeps and 'trainer' in locals():
@@ -207,6 +231,8 @@ def main(cfg: DictConfig):
     model_name = cfg.model.name if not cfg.matrix.reduce_dimensionality else f"{cfg.model.name}_svd"
     if cfg.matrix.subsample_frac < 1.0:
         model_name += f"_sub{int(cfg.matrix.subsample_frac*100)}"
+    if cfg.matrix.group_columns:
+        model_name += "_grp"
     min_kmer_freq = 2   # filters out extremely rare k-mers that don't appear at least twice
     k = cfg.matrix.k
     feature_mode = cfg.matrix.feat_mode
@@ -241,6 +267,7 @@ def main(cfg: DictConfig):
         reduce_dimensionality=False,                            # This is the "leaky" SVD that acts on both train and test, so it's not currently used.
         path_full_matrix=os.path.join(path_species, "feature_matrices", f"{fname}__feat_{'10M' if max_features is not None else 'full'}{'__sparse' if cfg.dataset.use_sparse else ''}.npz"),
         path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.pkl"),
+        group_columns=cfg.matrix.group_columns,                 # Merge identical columns, drop constant ones
     )
     
 
@@ -254,32 +281,26 @@ def main(cfg: DictConfig):
         logger.info("Only building the feature matrix ...")
 
         # save kmers for this size
-        save_fname_kmers = f"kmers_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl"
-        path_out_kmers = os.path.join(path_species, "models", save_fname_kmers)
-        # Use the kmer_features to get kmer names
-        kmers_columns = kmer_features.get_feature_names() # K-mer feature names in the order of the feature matrix columns
-        # Build a dict of kmer: count when the count starts at max_features and decrements to 1
-        kmer_counts_dict = {kmer: count for kmer, count in zip(kmers_columns, range(max_features, 0, -1))}
-        logger.info(f"Saving the k-mers used in the model to {path_out_kmers} ...")
-        # Save the truncated kmer features dict
-        with open(path_out_kmers, "wb") as f:
-            pickle.dump(kmer_counts_dict, f)
-        # logger.info(f"Feature matrix saved at {kmer_features.path_full_matrix}")
+        save_model_kmers(kmer_features, os.path.join(path_species, "models"), patho_short, antibiotic, k, feat)
         return
     
 
     
     # NOTE: when using the logistic classifier, normalize the feature matrix using TF-IDF 
     # because LGR is sensitive to feature scaling
-    if cfg.model.name == "LGR":
+    # The idf is saved with the model so that inference applies the same transformation.
+    # With grouped columns, CV groups each fold's columns on its training rows and builds the test fold
+    # like inference does (group medians), and TF-IDF is fit per fold. For grouped columns, each column
+    # counts once per merged k-mer in the row norms, plus the dropped constant columns.
+    tfidf_idf = None
+    fold_features = None
+    if cfg.matrix.group_columns:
+        fold_features = FoldFeatures(kmer_features.group_sizes, kmer_features.constant_sq_norm,
+                                     use_tfidf=cfg.model.name == "LGR")
+    elif cfg.model.name == "LGR":
         logger.info(f"Normalizing feature matrix using TF-IDF for {cfg.model.name} model ...")
-        tfidf_transformer = TfidfTransformer(use_idf=True, norm='l2')
-        X = tfidf_transformer.fit_transform(X)
-        # check if X is sparse
-        if sp_sparse.issparse(X):
-            logger.info("Feature matrix is sparse after TF-IDF transformation.")
-            logger.info("Converting to dense array ...")
-            X = X.toarray()
+        tfidf_idf = compute_idf(X)
+        X = apply_tfidf(X, tfidf_idf)
 
     
         
@@ -363,7 +384,10 @@ def main(cfg: DictConfig):
             sweep_config=sweep_config,
             fixed_run_config=fixed_config,
             checkpoint_dir=checkpoint_dir,
+            fold_features=fold_features,
         )
+        if fold_features is not None and fold_features.idf is not None:
+            tfidf_idf = fold_features.idf
 
         logger.info("Logging summary results to W&B...")
         run.log(summary_stats)
@@ -374,23 +398,23 @@ def main(cfg: DictConfig):
         os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
         
         # save the best model
-        save_fname_model = f"model_{model_name}__{fname}__feat_{feat}{'__no_sweep' if not cfg.use_sweeps else ''}.pkl"
+        save_fname_model = f"model_{run_name}.pkl"
         path_out_model = os.path.join(path_species, "models", save_fname_model)
         logger.info(f"Saving the best model to {path_out_model} ...")
         joblib.dump(full_train_model, path_out_model)
 
+        # save the TF-IDF parameters next to the model, for inference
+        if tfidf_idf is not None:
+            tfidf_params = {"idf": tfidf_idf}
+            if kmer_features.group_sizes is not None:
+                tfidf_params["group_sizes"] = kmer_features.group_sizes
+                tfidf_params["constant_sq_norm"] = kmer_features.constant_sq_norm
+            path_out_tfidf = os.path.join(path_species, "models", f"tfidf_{run_name}.npz")
+            logger.info(f"Saving the TF-IDF parameters to {path_out_tfidf} ...")
+            np.savez(path_out_tfidf, **tfidf_params)
+
         # save kmers for this size
-        save_fname_kmers = f"kmers_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl"
-        path_out_kmers = os.path.join(path_species, "models", save_fname_kmers)
-        # Use the kmer_features to get kmer names
-        kmers_columns = kmer_features.get_feature_names() # K-mer feature names in the order of the feature matrix columns
-        # Build a dict of kmer: count when the count starts at max_features and decrements to 1
-        num_kmers = X.shape[1] if max_features is None else max_features
-        kmer_counts_dict = {kmer: count for kmer, count in zip(kmers_columns, range(num_kmers, 0, -1))}
-        logger.info(f"Saving the k-mers used in the model to {path_out_kmers} ...")
-        # Save the truncated kmer features dict
-        with open(path_out_kmers, "wb") as f:
-            pickle.dump(kmer_counts_dict, f)
+        save_model_kmers(kmer_features, os.path.join(path_species, "models"), patho_short, antibiotic, k, feat)
 
         # Create the output results directory
         os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
@@ -407,7 +431,7 @@ def main(cfg: DictConfig):
             for idx, y_t, y_p, y_prob in zip(p["indices"], p["y_true"], p["y_pred"], p["y_prob"]):
                 preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p, "y_prob": y_prob})
         preds_df = pd.DataFrame(preds_rows)
-        preds_path = os.path.join(path_species, "results", f"preds_{model_name}__{fname}.csv")
+        preds_path = os.path.join(path_species, "results", f"preds_{run_name}.csv")
         preds_df.to_csv(preds_path, index=False)
         logger.info(f"Per-fold predictions saved to {preds_path}")
 

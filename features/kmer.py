@@ -17,6 +17,10 @@ except AttributeError:
     NUM_PROC = os.cpu_count()
 
 from features.utils import efficient_svd
+from features.column_groups import (
+    group_columns, iter_dense_rows, iter_npz_rows, npz_array_header, prefix_groups, members_of_groups,
+    constant_sq_norm
+)
 
 # Any run of characters other than A/C/G/T (N, or another IUPAC ambiguity code such as R, Y, K, M)
 NON_ACGT = re.compile(r"[^ACGT]+")
@@ -24,7 +28,7 @@ NON_ACGT = re.compile(r"[^ACGT]+")
 class KmerFeatures:
     def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False,
                  min_kmer_freq=2, use_canonical=True, batch_size=500, max_features=None, use_sparse=False,
-                 path_kmers=None, path_full_matrix=None):
+                 path_kmers=None, path_full_matrix=None, group_columns=False, path_kmer_groups=None):
         """
         Memory-efficient k-mer feature extraction with advanced feature selection.
         
@@ -40,6 +44,10 @@ class KmerFeatures:
         - use_sparse: bool, use sparse CSR matrix (True) or dense numpy arrays (False)
         - path_kmers: str, path to precomputed frequent k-mers dict (pkl file)
         - path_full_matrix: str, path to a large, precomputed matrix for sub-sampling
+        - group_columns: bool, merge columns that are identical across all genomes and drop constant
+          columns (training only; see features/column_groups.py). Dense matrices only.
+        - path_kmer_groups: str, path to the k-mer groups saved with a grouped model (inference only).
+          Each column's value is the median over its member k-mers, counting absent members as 0.
         """
         assert mode in ("binary", "count", "entropy", "svd"), "Mode must be one of: 'binary', 'count', 'entropy', 'svd'"
 
@@ -57,6 +65,19 @@ class KmerFeatures:
         self.use_sparse = use_sparse
         self.path_kmers = path_kmers
         self.path_full_matrix = path_full_matrix
+        self.group_columns = group_columns
+        self.path_kmer_groups = path_kmer_groups
+        self.group_sizes = None         # number of k-mers merged into each column (grouped runs only)
+        self.constant_sq_norm = 0.0     # TF-IDF norm contribution of the dropped constant columns (grouped runs only)
+        self.inference_groups = False   # True when columns are medians over k-mer groups
+
+        if group_columns and use_sparse:
+            raise ValueError("Column grouping supports dense matrices only; set use_sparse=False.")
+        if group_columns and path_kmer_groups:
+            raise ValueError("group_columns is for training and path_kmer_groups is for inference; use one.")
+        # Grouped matrices are cached next to the ungrouped matrix they are derived from
+        self.path_grouped_matrix = (path_full_matrix.replace(".npz", "__grouped.npz")
+                                    if group_columns and path_full_matrix else None)
 
         # Check if the parent directory of the kmers exists, and create it if not
         if self.path_kmers:
@@ -67,6 +88,9 @@ class KmerFeatures:
         # For two-pass approach
         self.kmer_global_counts = Counter()
         self.selected_kmers = set()
+
+        if path_kmer_groups:
+            self._load_kmer_groups(path_kmer_groups)
 
     def _reverse_complement(self, seq):
         """Get reverse complement of DNA sequence."""
@@ -193,7 +217,8 @@ class KmerFeatures:
                 self.mode,
                 self.selected_kmers,
                 self.kmer_to_col,
-                self._extract_kmers_from_file
+                self._extract_kmers_from_file,
+                self.group_sizes if self.inference_groups else None
             )
             for i, entry in enumerate(batch)
         ]
@@ -225,7 +250,7 @@ class KmerFeatures:
         Standalone worker function so it can be pickled by multiprocessing.
         Returns: (row_idx, {col_idx: value})
         """
-        (row_idx, entry, mode, selected_kmers, kmer_to_col, extract_func) = args
+        (row_idx, entry, mode, selected_kmers, kmer_to_col, extract_func, group_sizes) = args
 
         kmers = extract_func(entry['seq'])
         filtered = [k for k in kmers if k in selected_kmers]
@@ -246,8 +271,36 @@ class KmerFeatures:
             raise ValueError(f"Unknown mode: {mode}")
 
         # convert to column-indexed dictionary
+        if group_sizes is not None:
+            return row_idx, self._group_medians(kmer_dict, kmer_to_col, group_sizes)
         col_dict = {kmer_to_col[k]: val for k, val in kmer_dict.items()}
         return row_idx, col_dict
+
+    @staticmethod
+    def _group_medians(kmer_dict, kmer_to_col, group_sizes):
+        """Median of each column's member k-mer values, counting members absent from the genome as 0.
+
+        Returns {col_idx: median} for columns with a nonzero median."""
+        n = len(kmer_dict)
+        cols = np.fromiter((kmer_to_col[k] for k in kmer_dict), dtype=np.int64, count=n)
+        vals = np.fromiter(kmer_dict.values(), dtype=np.float64, count=n)
+        order = np.lexsort((vals, cols))
+        cols, vals = cols[order], vals[order]
+        present_cols, start, n_present = np.unique(cols, return_index=True, return_counts=True)
+        n_absent = group_sizes[present_cols] - n_present
+
+        def kth_value(pos):
+            # pos-th smallest of the column's values, where the absent members are the smallest (zeros)
+            idx = pos - n_absent
+            out = np.zeros(len(present_cols))
+            ok = idx >= 0
+            out[ok] = vals[start[ok] + idx[ok]]
+            return out
+
+        m = group_sizes[present_cols]
+        medians = (kth_value((m - 1) // 2) + kth_value(m // 2)) / 2
+        keep = medians != 0
+        return dict(zip(present_cols[keep].tolist(), medians[keep].tolist()))
 
 
 
@@ -255,7 +308,7 @@ class KmerFeatures:
         """Parallel version using multiprocessing. Fills the batch's rows of X in place.
 
         Returns X, which is a widened copy if a count did not fit in X's dtype."""
-        value_dtype = np.float64 if self.mode == "entropy" else np.int64
+        value_dtype = np.float64 if self.mode == "entropy" or self.inference_groups else np.int64
 
         # Prepare args for workers
         worker_args = [
@@ -265,7 +318,8 @@ class KmerFeatures:
                 self.mode,
                 self.selected_kmers,
                 self.kmer_to_col,
-                self._extract_kmers_from_file
+                self._extract_kmers_from_file,
+                self.group_sizes if self.inference_groups else None
             )
             for i, entry in enumerate(batch)
         ]
@@ -298,8 +352,9 @@ class KmerFeatures:
         """Get the initial dtype based on mode.
 
         Integer matrices start as uint8 and are widened with _fit_dtype when a count does not
-        fit, so the final dtype is the smallest one that holds every value."""
-        if self.mode in ("binary", "count"):
+        fit, so the final dtype is the smallest one that holds every value. Group medians can be
+        fractional, so they are stored as floats."""
+        if self.mode in ("binary", "count") and not self.inference_groups:
             return np.uint8
         else:
             return np.float32
@@ -317,7 +372,11 @@ class KmerFeatures:
         1. Load and sub-sample from a full matrix if available.
         2. Load from a standard precomputed matrix.
         3. Build from scratch and save the full matrix if a path is given.
+
+        With group_columns, the same steps run on the grouped matrix (see _build_grouped_matrix).
         """
+        if self.group_columns:
+            return self._build_grouped_matrix(dataset)
         
         # --- NEW: Priority 1 - Load and sub-sample from a full matrix ---
         if self.path_full_matrix and os.path.exists(self.path_full_matrix):
@@ -359,31 +418,146 @@ class KmerFeatures:
         #     return X, y
 
         # --- Fallback: Build matrix from scratch ---
-        logging.info("No precomputed matrix found, building from scratch...")
-        
-        # Step 1: Count and filter k-mers
-        self._count_global_kmers(dataset)
-        
-        if len(self.kmer_to_col) == 0:
-            raise ValueError("No k-mers passed the filtering criteria. Consider lowering min_kmer_freq.")
+        X, y = self._build_from_scratch(dataset)
 
-        # Step 2: Build feature matrix
-        if self.use_sparse:
-            X, y = self._build_sparse_matrix(dataset)
-        else:
-            X, y = self._build_dense_matrix(dataset) # Returned X is or
-        
-        # --- NEW: Save the newly built matrix as a 'full' matrix for future runs ---
-        if self.path_full_matrix:
-            logging.info(f"Saving the newly built matrix to {self.path_full_matrix} for future use.")
-            self.save_matrix(X, y, self.path_full_matrix)
-        
         if self.reduce_dim:
             logging.info("Applying dimensionality reduction using SVD...")
             _, _, X_reduced = efficient_svd(X)
             return X_reduced, y
             
         return X, y
+
+    def _build_from_scratch(self, dataset):
+        """Count k-mers, build the feature matrix and save it to path_full_matrix (if given)."""
+        logging.info("No precomputed matrix found, building from scratch...")
+        
+        # Step 1: Count and filter k-mers (inference with k-mer groups already has its columns)
+        if not self.inference_groups:
+            self._count_global_kmers(dataset)
+        
+        if self._n_columns() == 0:
+            raise ValueError("No k-mers passed the filtering criteria. Consider lowering min_kmer_freq.")
+
+        # Step 2: Build feature matrix
+        if self.use_sparse:
+            X, y = self._build_sparse_matrix(dataset)
+        else:
+            X, y = self._build_dense_matrix(dataset)
+        
+        # Save the newly built matrix as a 'full' matrix for future runs
+        if self.path_full_matrix:
+            logging.info(f"Saving the newly built matrix to {self.path_full_matrix} for future use.")
+            self.save_matrix(X, y, self.path_full_matrix)
+
+        return X, y
+
+    def _n_columns(self):
+        """Number of feature columns (with k-mer groups, several k-mers map to one column)."""
+        return len(self.group_sizes) if self.inference_groups else len(self.kmer_to_col)
+
+    # ------------------------------------------------------------------
+    # Column grouping (training)
+    # ------------------------------------------------------------------
+    def _build_grouped_matrix(self, dataset):
+        """Grouped version of build_feature_matrix: one column per distinct column pattern.
+
+        Uses the grouped cache if present, else groups the ungrouped cache (streamed, without
+        loading it into memory), else builds from scratch and groups the result."""
+        if self.path_grouped_matrix and os.path.exists(self.path_grouped_matrix):
+            logging.info(f"Loading grouped feature matrix from {self.path_grouped_matrix}...")
+            X, y = self._load_grouped_matrix(self.path_grouped_matrix)
+        else:
+            if self.path_full_matrix and os.path.exists(self.path_full_matrix):
+                logging.info(f"Grouping the columns of {self.path_full_matrix} (one-time conversion)...")
+                X, y = self._group_cached_matrix(self.path_full_matrix)
+            else:
+                X_full, y = self._build_from_scratch(dataset)
+                kmers = self._kmers_in_column_order(self.kmer_to_col, X_full.shape[1])
+                self.rep_cols, self.group_of, X, self.const_values = group_columns(
+                    lambda: iter_dense_rows(X_full), *X_full.shape, X_full.dtype)
+                del X_full
+                gc.collect()
+                self.kmers = kmers
+            if self.path_grouped_matrix:
+                self._save_grouped_matrix(X, y, self.path_grouped_matrix)
+
+        X = self._take_grouped_prefix(X)
+        if self.reduce_dim:
+            logging.info("Applying dimensionality reduction using SVD...")
+            _, _, X_reduced = efficient_svd(X)
+            return X_reduced, y
+        return X, y
+
+    def _kmers_in_column_order(self, kmer_to_col, n_cols):
+        """K-mers as a fixed-width bytes array, ordered by column."""
+        kmers = np.empty(n_cols, dtype=f"S{self.k}")
+        for kmer, col in kmer_to_col.items():
+            kmers[col] = kmer
+        return kmers
+
+    def _group_cached_matrix(self, filepath):
+        """Group the columns of a cached ungrouped .npz matrix, reading it in row blocks."""
+        with np.load(filepath, allow_pickle=True) as data:
+            matrix_type = str(data['matrix_type']) if 'matrix_type' in data else ('dense' if 'matrix' in data else 'sparse')
+            if matrix_type != 'dense':
+                raise ValueError(f"Column grouping supports dense matrices only, but {filepath} is {matrix_type}.")
+            y = data['labels']
+            kmer_to_col = data['kmer_to_col'].item()
+        (n_rows, n_cols), _, dtype = npz_array_header(filepath)
+        self.kmers = self._kmers_in_column_order(kmer_to_col, n_cols)
+        del kmer_to_col
+        gc.collect()
+        self.rep_cols, self.group_of, X, self.const_values = group_columns(
+            lambda: iter_npz_rows(filepath), n_rows, n_cols, dtype)
+        return X, y
+
+    def _take_grouped_prefix(self, X):
+        """Keep the grouped columns of the top max_features k-mers, and set kmer_to_col and group_sizes."""
+        n_total = len(self.group_of)
+        self.n_prefix = min(self.max_features, n_total) if self.max_features else n_total
+        n_kept, self.group_sizes = prefix_groups(self.rep_cols, self.group_of, self.n_prefix)
+        self.constant_sq_norm = constant_sq_norm(self.const_values, self.n_prefix)
+        if n_kept < X.shape[1]:
+            X = X[:, :n_kept].copy()
+        rep_kmers = self.kmers[self.rep_cols[:n_kept]].astype(str).tolist()
+        self.kmer_to_col = {kmer: j for j, kmer in enumerate(rep_kmers)}
+        logging.info(f"Using {n_kept:,} grouped columns for the top {self.n_prefix:,} k-mers. Matrix shape: {X.shape}")
+        return X
+
+    def get_column_groups(self):
+        """Member k-mers of each grouped column (within the top max_features), representative first."""
+        members = members_of_groups(self.group_of, self.n_prefix, len(self.group_sizes))
+        return [self.kmers[cols].astype(str).tolist() for cols in members]
+
+    def _save_grouped_matrix(self, X, y, filepath):
+        logging.info(f"Saving grouped matrix with shape {X.shape} to {filepath}")
+        os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
+        np.savez_compressed(filepath, matrix_type='grouped', matrix=X, labels=y,
+                            rep_cols=self.rep_cols, group_of=self.group_of, kmers=self.kmers,
+                            const_values=self.const_values)
+
+    def _load_grouped_matrix(self, filepath):
+        with np.load(filepath) as data:
+            X, y = data['matrix'], data['labels']
+            self.rep_cols, self.group_of, self.kmers = data['rep_cols'], data['group_of'], data['kmers']
+            self.const_values = data['const_values']
+        logging.info(f"Loaded grouped matrix with shape {X.shape}")
+        return X, y
+
+    # ------------------------------------------------------------------
+    # K-mer groups (inference)
+    # ------------------------------------------------------------------
+    def _load_kmer_groups(self, filepath):
+        """Load the k-mer groups saved with a grouped model: a list of member k-mers per column."""
+        logging.info(f"Loading k-mer groups from {filepath}...")
+        with open(filepath, 'rb') as f:
+            groups = pickle.load(f)
+        self.kmer_to_col = {kmer: col for col, members in enumerate(groups) for kmer in members}
+        self.selected_kmers = set(self.kmer_to_col)
+        self.group_sizes = np.array([len(members) for members in groups], dtype=np.int64)
+        self.representatives = [members[0] for members in groups]
+        self.inference_groups = True
+        logging.info(f"Loaded {len(groups):,} columns made of {len(self.kmer_to_col):,} k-mers")
 
     def _build_sparse_matrix(self, dataset):
         """Build sparse CSR matrix."""
@@ -406,7 +580,7 @@ class KmerFeatures:
 
         # Build sparse matrix
         n_rows = len(dataset)
-        n_cols = len(self.kmer_to_col)
+        n_cols = self._n_columns()
         
         logging.info(f"Building sparse matrix: {n_rows} samples x {n_cols} features")
         
@@ -443,7 +617,7 @@ class KmerFeatures:
     def _build_dense_matrix(self, dataset):
         """Build dense numpy matrix."""
         n_rows = len(dataset)
-        n_cols = len(self.kmer_to_col) # kmer_to_col only includes as many columns as was specified
+        n_cols = self._n_columns() # kmer_to_col only includes as many columns as was specified
         
         logging.info(f"Building dense matrix: {n_rows} samples x {n_cols} features")
         
@@ -469,6 +643,8 @@ class KmerFeatures:
 
     def get_feature_names(self):
         """Return list of k-mer features in column order."""
+        if self.inference_groups:
+            return list(self.representatives)
         if not self.kmer_to_col:
             return []
         return [kmer for kmer, _ in sorted(self.kmer_to_col.items(), key=lambda x: x[1])]

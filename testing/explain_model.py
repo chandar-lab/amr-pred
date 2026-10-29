@@ -11,6 +11,7 @@ Usage:
 """
 
 import os
+import pickle
 import re
 import time
 import logging
@@ -71,8 +72,8 @@ def main():
     # ---------------------
     logging.info("Running SHAP explainability ...")
     explainer = shap.Explainer(model)
-    col_to_kmer = {v: k for k, v in kmer_features.kmer_to_col.items()}
-    feature_names = [col_to_kmer[i] for i in range(len(col_to_kmer))]
+    # For grouped models, each column is named after its group's representative k-mer
+    feature_names = kmer_features.get_feature_names()
     explanation = explainer(X_test)
     explanation.feature_names = feature_names
     
@@ -112,6 +113,12 @@ def main():
         "kmer": explanation.feature_names,
         "mean_abs_shap_value": shap_values_mean
     })
+    if kmer_features.inference_groups:
+        # Every k-mer merged into the column; the model cannot tell them apart in the training data
+        with open(kmer_features.path_kmer_groups, "rb") as f:
+            kmer_groups = pickle.load(f)
+        shap_df["group_size"] = [len(members) for members in kmer_groups]
+        shap_df["group_kmers"] = [";".join(members) for members in kmer_groups]
     # Sort by mean_abs_shap_value descending
     shap_df = shap_df.sort_values(by="mean_abs_shap_value", ascending=False)
     shap_df = shap_df[shap_df["mean_abs_shap_value"] > 0]  # Keep only k-mers with non-zero SHAP values

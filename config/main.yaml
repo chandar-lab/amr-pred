@@ -29,6 +29,9 @@ matrix:
   max_features: 1_000_000         # Set to "None" to use all features. WARNING: This can be extremely memory intensive!
   reduce_dimensionality: False    # True/False, to use the SVD-based dimensionality reduction.
   subsample_frac: 1.0             # Fraction of genomes to use when building the feature matrix. Use 1.0 for all genomes (default)
+  group_columns: True             # Merge k-mer columns identical across all genomes and drop constant ones (model name gets "_grp").
+                                  # CV groups each fold on its training rows; test folds use the median over each group's
+                                  # k-mers, as at inference. Results differ from ungrouped runs.
 
 # argument to build the feature matrix only
 build_only: False
