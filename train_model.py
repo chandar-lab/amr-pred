@@ -252,8 +252,6 @@ def main(cfg: DictConfig):
     if cfg.build_only:
         # Exit early but save the feature matrix and k-mers, to load them later.
         logger.info("Only building the feature matrix ...")
-        # Build the feature matrix and save it
-        kmer_features.build_feature_matrix(dataset=dataset_list)
 
         # save kmers for this size
         save_fname_kmers = f"kmers_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl"
