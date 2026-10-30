@@ -417,11 +417,6 @@ class KmerFeatures:
                 return self._load_kmer_pickle(path)
             if os.path.exists(path):
                 return self._load_kmer_npz(path)
-            path_legacy = path[:-len(".npz")] + ".pkl"
-            if os.path.exists(path_legacy):
-                # Pickled counts do not record which genomes were counted, so they cannot be trusted
-                logging.warning(f"Ignoring the legacy k-mer counts in {path_legacy} (no record of the genomes "
-                                f"counted); it is no longer used and can be deleted.")
         except (OSError, pickle.PickleError, ValueError, KeyError) as e:
             logging.warning(f"Failed to load precomputed kmers: {e}. Computing from scratch...")
         return None, None
