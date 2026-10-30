@@ -30,18 +30,18 @@ logger = logging.getLogger(__name__)
 CACHE_FEATURES = 10_000_000
 
 
-def save_model_kmers(kmer_features, path_models, patho_short, antibiotic, k, feat):
+def save_model_kmers(kmer_features, path_models, patho_short, antibiotic, k, mode, feat):
     """Save the k-mers needed at inference: the k-mer groups for grouped runs, else the k-mer list."""
     os.makedirs(path_models, exist_ok=True)
     if kmer_features.group_columns:
         # List in column order; each entry lists the column's member k-mers, representative first
         payload = kmer_features.get_column_groups()
-        path_out_kmers = os.path.join(path_models, f"kmer_groups_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl")
+        path_out_kmers = os.path.join(path_models, f"kmer_groups_{patho_short}__{antibiotic}__k_{k}__mode_{mode}__feat_{feat}.pkl")
     else:
         kmers_columns = kmer_features.get_feature_names() # K-mer feature names in the order of the feature matrix columns
         # Build a dict of kmer: count when the count starts at the number of k-mers and decrements to 1
         payload = {kmer: count for kmer, count in zip(kmers_columns, range(len(kmers_columns), 0, -1))}
-        path_out_kmers = os.path.join(path_models, f"kmers_{patho_short}__{antibiotic}__k_{k}__feat_{feat}.pkl")
+        path_out_kmers = os.path.join(path_models, f"kmers_{patho_short}__{antibiotic}__k_{k}__mode_{mode}__feat_{feat}.pkl")
     logger.info(f"Saving the k-mers used in the model to {path_out_kmers} ...")
     with open(path_out_kmers, "wb") as f:
         pickle.dump(payload, f)
@@ -287,7 +287,7 @@ def main(cfg: DictConfig):
         logger.info("Only building the feature matrix ...")
 
         # save kmers for this size
-        save_model_kmers(kmer_features, os.path.join(path_species, "models"), patho_short, antibiotic, k, feat)
+        save_model_kmers(kmer_features, os.path.join(path_species, "models"), patho_short, antibiotic, k, feature_mode, feat)
         return
     
 
@@ -420,7 +420,7 @@ def main(cfg: DictConfig):
             np.savez(path_out_tfidf, **tfidf_params)
 
         # save kmers for this size
-        save_model_kmers(kmer_features, os.path.join(path_species, "models"), patho_short, antibiotic, k, feat)
+        save_model_kmers(kmer_features, os.path.join(path_species, "models"), patho_short, antibiotic, k, feature_mode, feat)
 
         # Create the output results directory
         os.makedirs(os.path.join(path_species, "results"), exist_ok=True)

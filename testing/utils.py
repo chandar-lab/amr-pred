@@ -141,7 +141,14 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out):
     # Grouped models (model name ends in "_grp") use k-mer groups: each column is the median over its k-mers
     grouped = model_info['model_name'].endswith('_grp')
     kmers_fname = "kmer_groups" if grouped else "kmers"
-    path_kmers = os.path.join(model_parent_path, f"{kmers_fname}_{pathogen}__{antibiotic}__k_{k}__feat_{fmat_size}.pkl")
+    path_kmers = os.path.join(model_parent_path, f"{kmers_fname}_{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_{fmat_size}.pkl")
+    if not os.path.isfile(path_kmers):
+        # Models saved before the mode was part of the name
+        path_kmers_legacy = os.path.join(model_parent_path, f"{kmers_fname}_{pathogen}__{antibiotic}__k_{k}__feat_{fmat_size}.pkl")
+        if os.path.isfile(path_kmers_legacy):
+            logging.warning(f"Using {path_kmers_legacy}, saved before the k-mer mode was part of the name; "
+                            f"check that it was saved by a {kmer_mode} model.")
+            path_kmers = path_kmers_legacy
     if not os.path.isfile(path_kmers):
         # Throw an error if kmer file not found; it's necessary
         raise FileNotFoundError(f"K-mer file not found: {path_kmers}. Necessary for feature extraction.")

@@ -266,8 +266,10 @@ class KmerFeatures:
         - max_features: int, maximum number of features to keep (most frequent)
         - use_sparse: bool, use sparse CSR matrix (True) or dense numpy arrays (False)
         - path_kmers: str, path to the frequent k-mer counts: an .npz cache of the counting pass (written
-          if missing), or a {kmer: count} pickle (a model's k-mers at inference). A counting cache saved as
-          a pickle before the .npz format is converted once, from the .pkl next to the .npz path.
+          if missing), or a {kmer: count} pickle (a model's k-mers at inference).
+
+        The caches (path_kmers .npz, path_full_matrix and its grouped version) record the assembly IDs of
+        the genomes they were built from, in row order, and are only reused for exactly the same genomes.
         - path_full_matrix: str, path to a large, precomputed matrix for sub-sampling
         - cache_features: int, number of top k-mers to build and cache in path_full_matrix, so that runs with
           different max_features can share it (default: max_features). Must be at least max_features.
@@ -301,6 +303,7 @@ class KmerFeatures:
         self.group_sizes = None         # number of k-mers merged into each column (grouped runs only)
         self.constant_sq_norm = 0.0     # TF-IDF norm contribution of the dropped constant columns (grouped runs only)
         self.inference_groups = False   # True when columns are medians over k-mer groups
+        self.assemblies = None          # assembly IDs of the dataset's genomes, in row order (set per build)
 
         if group_columns and use_sparse:
             raise ValueError("Column grouping supports dense matrices only; set use_sparse=False.")
@@ -416,11 +419,9 @@ class KmerFeatures:
                 return self._load_kmer_npz(path)
             path_legacy = path[:-len(".npz")] + ".pkl"
             if os.path.exists(path_legacy):
-                logging.info(f"Converting the k-mer counts in {path_legacy} to {path} (one-time conversion)...")
-                keys, counts = self._load_kmer_pickle(path_legacy)
-                self._save_kmer_counts(keys, counts, path)
-                logging.info(f"{path_legacy} is no longer used and can be deleted.")
-                return keys, counts
+                # Pickled counts do not record which genomes were counted, so they cannot be trusted
+                logging.warning(f"Ignoring the legacy k-mer counts in {path_legacy} (no record of the genomes "
+                                f"counted); it is no longer used and can be deleted.")
         except (OSError, pickle.PickleError, ValueError, KeyError) as e:
             logging.warning(f"Failed to load precomputed kmers: {e}. Computing from scratch...")
         return None, None
@@ -433,6 +434,8 @@ class KmerFeatures:
             if (k, canonical) != (self.k, self.use_canonical) or min_freq > self.min_kmer_freq:
                 logging.warning(f"{path} was counted with k={k}, use_canonical={canonical}, min_kmer_freq="
                                 f"{min_freq}, which does not match this run. Computing from scratch...")
+                return None, None
+            if not self._same_assemblies(data, path):
                 return None, None
             keys, counts = data['keys'], data['counts']
         if min_freq < self.min_kmer_freq:
@@ -463,7 +466,7 @@ class KmerFeatures:
             path_tmp = filepath + ".tmp"
             with open(path_tmp, 'wb') as f:
                 np.savez(f, keys=keys, counts=counts, k=self.k, use_canonical=self.use_canonical,
-                         min_kmer_freq=self.min_kmer_freq)
+                         min_kmer_freq=self.min_kmer_freq, **self._assembly_fields())
             os.replace(path_tmp, filepath)
             logging.info(f"Saved frequent k-mer counts to {filepath}")
         except Exception as e:
@@ -619,6 +622,7 @@ class KmerFeatures:
 
         With group_columns, the same steps run on the grouped matrix (see _build_grouped_matrix).
         """
+        self.assemblies = self._assembly_ids(dataset)
         if self.group_columns:
             return self._build_grouped_matrix(dataset)
         
@@ -626,6 +630,7 @@ class KmerFeatures:
         if self._usable_cache(self.path_full_matrix):
             logging.info(f"Loading full feature matrix from {self.path_full_matrix} to sub-sample...")
             X, y = self.load_matrix(self.path_full_matrix)  # This also loads the full kmer_to_col map
+            y = self._dataset_labels(dataset, y)
         else:
             # --- Fallback: Build matrix from scratch (and cache it) ---
             X, y = self._build_from_scratch(dataset)
@@ -658,6 +663,44 @@ class KmerFeatures:
         return X_sub
 
     @staticmethod
+    def _assembly_ids(dataset):
+        """Assembly IDs of the dataset's genomes in row order, or None if an entry has no 'assembly'."""
+        if not all('assembly' in entry for entry in dataset):
+            return None
+        return np.array([entry['assembly'] for entry in dataset], dtype=str)
+
+    def _assembly_fields(self):
+        """Fields recording the dataset's assembly IDs in a saved cache (none if they are unknown)."""
+        return {} if self.assemblies is None else {'assemblies': self.assemblies}
+
+    def _same_assemblies(self, data, filepath):
+        """Whether a cache (an open .npz) was built from the dataset's genomes, in the same order.
+
+        Caches saved without assembly IDs are not trusted. Without assembly IDs for the dataset, there is
+        nothing to check against."""
+        if self.assemblies is None:
+            return True
+        if 'assemblies' not in data:
+            logging.warning(f"{filepath} does not record the genomes it was built from; it will be rebuilt.")
+            return False
+        cached = data['assemblies']
+        if np.array_equal(cached, self.assemblies):
+            return True
+        n_shared = len(np.intersect1d(cached, self.assemblies))
+        logging.warning(f"{filepath} was built from {len(cached):,} genomes, which do not match (in order) the "
+                        f"dataset's {len(self.assemblies):,} genomes ({n_shared:,} in common); it will be rebuilt.")
+        return False
+
+    @staticmethod
+    def _dataset_labels(dataset, y_cached):
+        """Labels of the dataset, which may have been revised since a cached matrix saved its labels."""
+        y = np.array([entry['label'] for entry in dataset])
+        if len(y) == len(y_cached) and not np.array_equal(y, y_cached):
+            logging.warning(f"{int((y != y_cached).sum()):,} labels differ from the cached matrix's; using the "
+                            f"dataset's labels.")
+        return y
+
+    @staticmethod
     def _cache_columns(filepath):
         """Number of k-mer columns of a cached matrix and the k-mer cap it was built with, read without
         loading the matrix. The cap is 0 for no cap, and -1 for caches saved before the cap was recorded."""
@@ -677,6 +720,9 @@ class KmerFeatures:
         for any max_features."""
         if not filepath or not os.path.exists(filepath):
             return False
+        with np.load(filepath, allow_pickle=True) as data:
+            if not self._same_assemblies(data, filepath):
+                return False
         n_cols, n_kmers_cap = self._cache_columns(filepath)
         if self.max_features is not None and n_cols >= self.max_features:
             return True
@@ -754,6 +800,7 @@ class KmerFeatures:
                 gc.collect()
                 X, y = self._load_grouped_matrix(self.path_grouped_matrix)
 
+        y = self._dataset_labels(dataset, y)
         X = self._take_grouped_prefix(X)
         if self.reduce_dim:
             logging.info("Applying dimensionality reduction using SVD...")
@@ -822,7 +869,7 @@ class KmerFeatures:
         np.save(path_array, np.ascontiguousarray(X))
         np.savez_compressed(filepath, matrix_type='grouped', labels=y,
                             rep_cols=self.rep_cols, group_of=self.group_of, kmers=self.kmers,
-                            const_values=self.const_values, n_kmers_cap=n_kmers_cap)
+                            const_values=self.const_values, n_kmers_cap=n_kmers_cap, **self._assembly_fields())
 
     def _load_grouped_matrix(self, filepath):
         """Load the grouped metadata, and memory-map the matrix (read-only)."""
@@ -980,7 +1027,8 @@ class KmerFeatures:
                                 labels=y,
                                 kmer_to_col=self.kmer_to_col,
                                 use_sparse=self.use_sparse,
-                                n_kmers_cap=self.cache_features or 0)
+                                n_kmers_cap=self.cache_features or 0,
+                                **self._assembly_fields())
         else:  # Dense matrix
             logging.info(f"Saving dense matrix with shape {X.shape}")
             np.savez_compressed(filepath, 
@@ -989,7 +1037,8 @@ class KmerFeatures:
                                 labels=y,
                                 kmer_to_col=self.kmer_to_col,
                                 use_sparse=self.use_sparse,
-                                n_kmers_cap=self.cache_features or 0)
+                                n_kmers_cap=self.cache_features or 0,
+                                **self._assembly_fields())
 
         logging.info(f"Saved matrix and k-mer mapping to {filepath}")           
 
