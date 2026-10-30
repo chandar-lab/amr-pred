@@ -25,6 +25,21 @@ from features.column_groups import (
 # Any run of characters other than A/C/G/T (N, or another IUPAC ambiguity code such as R, Y, K, M)
 NON_ACGT = re.compile(r"[^ACGT]+")
 
+# The KmerFeatures object used by a pool worker. It is set once when the worker starts (inherited, not
+# pickled, under fork), so the large k-mer -> column map is not sent to the workers with every genome.
+_worker_features = None
+
+
+def _init_worker(kmer_features):
+    global _worker_features
+    _worker_features = kmer_features
+
+
+def _process_entry(args):
+    """Pool task: one genome's row as (row_idx, cols, vals)."""
+    row_idx, fna_path = args
+    return _worker_features._process_single_sequence(row_idx, fna_path)
+
 class KmerFeatures:
     def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False,
                  min_kmer_freq=2, use_canonical=True, batch_size=500, max_features=None, use_sparse=False,
@@ -82,7 +97,8 @@ class KmerFeatures:
             raise ValueError("Column grouping supports dense matrices only; set use_sparse=False.")
         if group_columns and path_kmer_groups:
             raise ValueError("group_columns is for training and path_kmer_groups is for inference; use one.")
-        # Grouped matrices are cached next to the ungrouped matrix they are derived from
+        # Grouped matrices are cached next to the ungrouped matrix they are derived from: the metadata in an
+        # .npz, and the matrix in an uncompressed .npy that is memory-mapped, so only the columns used are read
         self.path_grouped_matrix = (path_full_matrix.replace(".npz", "__grouped.npz")
                                     if group_columns and path_full_matrix else None)
 
@@ -206,63 +222,53 @@ class KmerFeatures:
         except Exception as e:
             logging.warning(f"Failed to save frequent k-mers: {e}")
 
-    def _process_sequence_batch_sparse(self, batch, start_row_idx):
+    def _worker_pool(self):
+        """Pool whose workers receive this object (with its k-mer -> column map) once, at startup."""
+        return Pool(processes=NUM_PROC, initializer=_init_worker, initargs=(self,))
+
+    def _process_sequence_batch_sparse(self, batch, start_row_idx, pool):
         """
         Parallel sparse processing using the same _process_single_sequence
         worker function as the dense version.
-        Returns: (data, rows, cols)
+        Returns: (data, rows, cols), lists of per-genome arrays
         """
 
         data, rows, cols = [], [], []
 
-        # Prepare args for workers — note: row_idx is relative,
-        # so we still add start_row_idx after
-        worker_args = [
-            (
-                i,                      # relative row index
-                entry,
-                self.mode,
-                self.selected_kmers,
-                self.kmer_to_col,
-                self._extract_kmers_from_file,
-                self.group_sizes if self.inference_groups else None
-            )
-            for i, entry in enumerate(batch)
-        ]
+        # Workers only need the row index (relative to the batch) and the genome path
+        worker_args = [(i, entry['seq']) for i, entry in enumerate(batch)]
 
-        # Process in parallel
-        with Pool(processes=NUM_PROC) as pool:
-            for rel_row_idx, col_dict in tqdm(
-                pool.imap_unordered(self._process_single_sequence, worker_args),
-                total=len(worker_args),
-                desc=f"Processing sparse batch ({NUM_PROC} processes)",
-            ):
-                if not col_dict:
-                    continue  # skip empty rows
+        for rel_row_idx, row_cols, row_vals in tqdm(
+            pool.imap_unordered(_process_entry, worker_args),
+            total=len(worker_args),
+            desc=f"Processing sparse batch ({NUM_PROC} processes)",
+        ):
+            if len(row_cols) == 0:
+                continue  # skip empty rows
 
-                # Convert relative index → absolute index
-                abs_row_idx = start_row_idx + rel_row_idx
-
-                # Append all sparse entries
-                for col_idx, val in col_dict.items():
-                    rows.append(abs_row_idx)
-                    cols.append(col_idx)
-                    data.append(val)
+            # Convert relative index → absolute index
+            rows.append(np.full(len(row_cols), start_row_idx + rel_row_idx, dtype=np.int64))
+            cols.append(row_cols)
+            data.append(row_vals)
 
         return data, rows, cols
 
 
-    def _process_single_sequence(self, args):
-        """
-        Standalone worker function so it can be pickled by multiprocessing.
-        Returns: (row_idx, {col_idx: value})
-        """
-        (row_idx, entry, mode, selected_kmers, kmer_to_col, extract_func, group_sizes) = args
+    def _value_dtype(self):
+        """Dtype of the row values computed by the workers (before fitting them into the matrix dtype)."""
+        return np.float64 if self.mode == "entropy" or self.inference_groups else np.int64
 
-        kmers = extract_func(entry['seq'])
-        filtered = [k for k in kmers if k in selected_kmers]
+    def _process_single_sequence(self, row_idx, fna_path):
+        """
+        Worker function (run through _process_entry): one genome's row.
+        Returns: (row_idx, cols, vals), with cols an int64 array and vals a _value_dtype() array
+        """
+        mode, kmer_to_col = self.mode, self.kmer_to_col
+
+        kmers = self._extract_kmers_from_file(fna_path)
+        filtered = [k for k in kmers if k in kmer_to_col]
         if not filtered:
-            return row_idx, {}  # empty row
+            return row_idx, np.zeros(0, np.int64), np.zeros(0, self._value_dtype())  # empty row
 
         # build statistic depending on mode
         if mode == "binary":
@@ -277,17 +283,19 @@ class KmerFeatures:
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-        # convert to column-indexed dictionary
-        if group_sizes is not None:
-            return row_idx, self._group_medians(kmer_dict, kmer_to_col, group_sizes)
-        col_dict = {kmer_to_col[k]: val for k, val in kmer_dict.items()}
-        return row_idx, col_dict
+        # convert to column indices and values
+        if self.inference_groups:
+            return (row_idx, *self._group_medians(kmer_dict, kmer_to_col, self.group_sizes))
+        n = len(kmer_dict)
+        cols = np.fromiter((kmer_to_col[k] for k in kmer_dict), dtype=np.int64, count=n)
+        vals = np.fromiter(kmer_dict.values(), dtype=self._value_dtype(), count=n)
+        return row_idx, cols, vals
 
     @staticmethod
     def _group_medians(kmer_dict, kmer_to_col, group_sizes):
         """Median of each column's member k-mer values, counting members absent from the genome as 0.
 
-        Returns {col_idx: median} for columns with a nonzero median."""
+        Returns (cols, medians) for the columns with a nonzero median."""
         n = len(kmer_dict)
         cols = np.fromiter((kmer_to_col[k] for k in kmer_dict), dtype=np.int64, count=n)
         vals = np.fromiter(kmer_dict.values(), dtype=np.float64, count=n)
@@ -307,51 +315,33 @@ class KmerFeatures:
         m = group_sizes[present_cols]
         medians = (kth_value((m - 1) // 2) + kth_value(m // 2)) / 2
         keep = medians != 0
-        return dict(zip(present_cols[keep].tolist(), medians[keep].tolist()))
+        return present_cols[keep], medians[keep]
 
 
 
-    def _process_sequence_batch_dense(self, batch, start_row_idx, X):
+    def _process_sequence_batch_dense(self, batch, start_row_idx, X, pool):
         """Parallel version using multiprocessing. Fills the batch's rows of X in place.
 
         Returns X, which is a widened copy if a count did not fit in X's dtype."""
-        value_dtype = np.float64 if self.mode == "entropy" or self.inference_groups else np.int64
+        # Workers only need the row index (relative to the batch) and the genome path
+        worker_args = [(i, entry['seq']) for i, entry in enumerate(batch)]
 
-        # Prepare args for workers
-        worker_args = [
-            (
-                i,
-                entry,
-                self.mode,
-                self.selected_kmers,
-                self.kmer_to_col,
-                self._extract_kmers_from_file,
-                self.group_sizes if self.inference_groups else None
-            )
-            for i, entry in enumerate(batch)
-        ]
+        for row_idx, cols, vals in tqdm(
+            pool.imap_unordered(_process_entry, worker_args),
+            total=len(worker_args),
+            desc=f"Processing dense batch ({NUM_PROC} processes)",
+        ):
+            if len(cols) == 0:
+                continue  # skip empty rows
 
-        # Process using a pool + tqdm
-        with Pool(processes=NUM_PROC) as pool:
-            for row_idx, col_dict in tqdm(
-                pool.imap_unordered(self._process_single_sequence, worker_args),
-                total=len(worker_args),
-                desc=f"Processing dense batch ({NUM_PROC} processes)",
-            ):
-                if not col_dict:
-                    continue  # skip empty rows
+            # Numpy wraps out-of-range integers silently, so check before writing the row
+            new_dtype = self._fit_dtype(X.dtype, vals.max())
+            if new_dtype != X.dtype:
+                logging.warning(f"Count {int(vals.max())} does not fit in {X.dtype}; widening the feature matrix "
+                                f"to {new_dtype} (copies {X.nbytes / 1024**3:.1f} GB)")
+                X = X.astype(new_dtype)
 
-                cols = np.fromiter(col_dict.keys(), dtype=np.int64, count=len(col_dict))
-                vals = np.fromiter(col_dict.values(), dtype=value_dtype, count=len(col_dict))
-
-                # Numpy wraps out-of-range integers silently, so check before writing the row
-                new_dtype = self._fit_dtype(X.dtype, vals.max())
-                if new_dtype != X.dtype:
-                    logging.warning(f"Count {int(vals.max())} does not fit in {X.dtype}; widening the feature matrix "
-                                    f"to {new_dtype} (copies {X.nbytes / 1024**3:.1f} GB)")
-                    X = X.astype(new_dtype)
-
-                X[start_row_idx + row_idx, cols] = vals
+            X[start_row_idx + row_idx, cols] = vals
 
         return X
 
@@ -491,7 +481,7 @@ class KmerFeatures:
 
         Uses the grouped cache if present, else groups the ungrouped cache (streamed, without
         loading it into memory), else builds from scratch and groups the result."""
-        if self._usable_cache(self.path_grouped_matrix):
+        if self._usable_cache(self.path_grouped_matrix) and self._has_grouped_array(self.path_grouped_matrix):
             logging.info(f"Loading grouped feature matrix from {self.path_grouped_matrix}...")
             X, y = self._load_grouped_matrix(self.path_grouped_matrix)
         else:
@@ -510,6 +500,10 @@ class KmerFeatures:
                 n_kmers_cap = self.cache_features or 0
             if self.path_grouped_matrix:
                 self._save_grouped_matrix(X, y, self.path_grouped_matrix, n_kmers_cap)
+                # Re-open it memory-mapped, so the first run uses as little memory as later runs
+                del X
+                gc.collect()
+                X, y = self._load_grouped_matrix(self.path_grouped_matrix)
 
         X = self._take_grouped_prefix(X)
         if self.reduce_dim:
@@ -548,7 +542,7 @@ class KmerFeatures:
         n_kept, self.group_sizes = prefix_groups(self.rep_cols, self.group_of, self.n_prefix)
         self.constant_sq_norm = constant_sq_norm(self.const_values, self.n_prefix)
         if n_kept < X.shape[1]:
-            X = X[:, :n_kept].copy()
+            X = X[:, :n_kept]   # a view: on a memory-mapped matrix, only these columns are ever read
         rep_kmers = self.kmers[self.rep_cols[:n_kept]].astype(str).tolist()
         self.kmer_to_col = {kmer: j for j, kmer in enumerate(rep_kmers)}
         logging.info(f"Using {n_kept:,} grouped columns for the top {self.n_prefix:,} k-mers. Matrix shape: {X.shape}")
@@ -559,20 +553,48 @@ class KmerFeatures:
         members = members_of_groups(self.group_of, self.n_prefix, len(self.group_sizes))
         return [self.kmers[cols].astype(str).tolist() for cols in members]
 
+    @staticmethod
+    def _grouped_array_path(filepath):
+        return filepath.replace(".npz", ".npy")
+
+    def _has_grouped_array(self, filepath):
+        """Whether the grouped cache's matrix exists: its .npy, or in the .npz for caches saved before memory-mapping."""
+        if os.path.exists(self._grouped_array_path(filepath)):
+            return True
+        with np.load(filepath) as data:
+            return 'matrix' in data
+
     def _save_grouped_matrix(self, X, y, filepath, n_kmers_cap):
-        """n_kmers_cap is the k-mer cap of the ungrouped matrix (see _cache_columns)."""
-        logging.info(f"Saving grouped matrix with shape {X.shape} to {filepath}")
+        """n_kmers_cap is the k-mer cap of the ungrouped matrix (see _cache_columns).
+
+        The matrix goes to an uncompressed .npy and the metadata to the .npz. The .npz is written last,
+        so a cache interrupted while saving has no .npz and counts as missing."""
+        path_array = self._grouped_array_path(filepath)
+        logging.info(f"Saving grouped matrix with shape {X.shape} to {path_array}")
         os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
-        np.savez_compressed(filepath, matrix_type='grouped', matrix=X, labels=y,
+        np.save(path_array, np.ascontiguousarray(X))
+        np.savez_compressed(filepath, matrix_type='grouped', labels=y,
                             rep_cols=self.rep_cols, group_of=self.group_of, kmers=self.kmers,
                             const_values=self.const_values, n_kmers_cap=n_kmers_cap)
 
     def _load_grouped_matrix(self, filepath):
+        """Load the grouped metadata, and memory-map the matrix (read-only)."""
+        path_array = self._grouped_array_path(filepath)
         with np.load(filepath) as data:
-            X, y = data['matrix'], data['labels']
+            y = data['labels']
             self.rep_cols, self.group_of, self.kmers = data['rep_cols'], data['group_of'], data['kmers']
             self.const_values = data['const_values']
-        logging.info(f"Loaded grouped matrix with shape {X.shape}")
+            n_kmers_cap = int(data['n_kmers_cap'])
+            # Caches saved before memory-mapping keep the matrix in the compressed .npz: move it out once
+            # (always rewritten from the .npz, in case an earlier conversion was interrupted)
+            X = data['matrix'] if 'matrix' in data else None
+        if X is not None:
+            logging.info(f"Moving the grouped matrix of {filepath} to {path_array} (one-time conversion)...")
+            self._save_grouped_matrix(X, y, filepath, n_kmers_cap)
+            del X
+            gc.collect()
+        X = np.load(path_array, mmap_mode='r')
+        logging.info(f"Memory-mapped grouped matrix with shape {X.shape} from {path_array}")
         return X, y
 
     # ------------------------------------------------------------------
@@ -596,18 +618,19 @@ class KmerFeatures:
         labels = []
         
         logging.info("Building sparse feature matrix...")
-        for i in tqdm(range(0, len(dataset), self.batch_size), desc="Processing batches"):
-            batch = dataset[i:i + self.batch_size]
-            batch_data, batch_rows, batch_cols = self._process_sequence_batch_sparse(batch, i)
-            
-            all_data.extend(batch_data)
-            all_rows.extend(batch_rows)
-            all_cols.extend(batch_cols)
-            
-            labels.extend([entry['label'] for entry in batch])
-            
-            if i % (self.batch_size * 10) == 0:
-                gc.collect()    # Periodically clear memory
+        with self._worker_pool() as pool:
+            for i in tqdm(range(0, len(dataset), self.batch_size), desc="Processing batches"):
+                batch = dataset[i:i + self.batch_size]
+                batch_data, batch_rows, batch_cols = self._process_sequence_batch_sparse(batch, i, pool)
+
+                all_data.extend(batch_data)
+                all_rows.extend(batch_rows)
+                all_cols.extend(batch_cols)
+
+                labels.extend([entry['label'] for entry in batch])
+
+                if i % (self.batch_size * 10) == 0:
+                    gc.collect()    # Periodically clear memory
 
         # Build sparse matrix
         n_rows = len(dataset)
@@ -615,7 +638,10 @@ class KmerFeatures:
         
         logging.info(f"Building sparse matrix: {n_rows} samples x {n_cols} features")
         
-        dtype = self._fit_dtype(self._get_dtype(), max(all_data, default=0))
+        all_data = np.concatenate(all_data) if all_data else np.zeros(0, self._value_dtype())
+        all_rows = np.concatenate(all_rows) if all_rows else np.zeros(0, np.int64)
+        all_cols = np.concatenate(all_cols) if all_cols else np.zeros(0, np.int64)
+        dtype = self._fit_dtype(self._get_dtype(), all_data.max(initial=0))
         logging.info(f"Using dtype {dtype} for the sparse matrix")
         X = csr_matrix((all_data, (all_rows, all_cols)), shape=(n_rows, n_cols), dtype=dtype)
         y = np.array(labels)
@@ -656,14 +682,15 @@ class KmerFeatures:
         labels = []
         
         logging.info("Building dense feature matrix...")
-        for i in tqdm(range(0, len(dataset), self.batch_size), desc="Processing batches"):
-            batch = dataset[i:i + self.batch_size]
-            X = self._process_sequence_batch_dense(batch, i, X)
-            
-            labels.extend([entry['label'] for entry in batch])
-            
-            if i % (self.batch_size * 10) == 0:
-                gc.collect()    # Periodically clear memory
+        with self._worker_pool() as pool:
+            for i in tqdm(range(0, len(dataset), self.batch_size), desc="Processing batches"):
+                batch = dataset[i:i + self.batch_size]
+                X = self._process_sequence_batch_dense(batch, i, X, pool)
+
+                labels.extend([entry['label'] for entry in batch])
+
+                if i % (self.batch_size * 10) == 0:
+                    gc.collect()    # Periodically clear memory
 
         y = np.array(labels)
         
