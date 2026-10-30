@@ -272,7 +272,7 @@ def main(cfg: DictConfig):
         reduce_dimensionality=False,                            # This is the "leaky" SVD that acts on both train and test, so it's not currently used.
         path_full_matrix=os.path.join(path_species, "feature_matrices", f"{fname}__feat_{cache_feat}{'__sparse' if cfg.dataset.use_sparse else ''}.npz"),
         cache_features=cache_features,                          # Build the shared cache at its full size
-        path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.pkl"),
+        path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.npz"),
         group_columns=cfg.matrix.group_columns,                 # Merge identical columns, drop constant ones
     )
     

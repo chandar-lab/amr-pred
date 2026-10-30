@@ -10,6 +10,8 @@ import gc
 import pickle
 import os
 import re
+import shutil
+import tempfile
 
 try:
     NUM_PROC = len(psutil.Process().cpu_affinity())
@@ -40,6 +42,211 @@ def _process_entry(args):
     row_idx, fna_path = args
     return _worker_features._process_single_sequence(row_idx, fna_path)
 
+
+# ----------------------------------------------------------------------
+# K-mers as integers (counting pass)
+# ----------------------------------------------------------------------
+# A k-mer is stored in 2 bits per base (A=0, C=1, G=2, T=3), 32 bases per uint64 word, its first bases in
+# the first word. For k <= 32 the keys are a uint64 array; for longer k they are a structured array with
+# one uint64 field per word. Both sort in the same order as the k-mer strings.
+_BASES_PER_WORD = 32
+_MAX_WORDS = 4
+MAX_K = _MAX_WORDS * _BASES_PER_WORD
+_INVALID = 4
+_BASE_CODE = np.full(256, _INVALID, dtype=np.uint8)
+for _code, _base in enumerate(b"ACGT"):
+    _BASE_CODE[_base] = _code
+    _BASE_CODE[ord(chr(_base).lower())] = _code
+_CODE_BASE = np.frombuffer(b"ACGT", dtype=np.uint8)
+# Genomes merged into a shard's running counts at a time
+_MERGE_EVERY = 32
+
+
+def _word_spans(k):
+    """(first base, number of bases) of each word of a k-mer."""
+    return [(off, min(_BASES_PER_WORD, k - off)) for off in range(0, k, _BASES_PER_WORD)]
+
+
+def _key_dtype(k):
+    if not 1 <= k <= MAX_K:
+        raise ValueError(f"k must be between 1 and {MAX_K}, got {k}.")
+    n_words = len(_word_spans(k))
+    if n_words == 1:
+        return np.dtype(np.uint64)
+    return np.dtype([(f"w{i}", np.uint64) for i in range(n_words)])
+
+
+def _key_columns(keys):
+    """The uint64 words of the keys, most significant first."""
+    if keys.dtype.names is None:
+        return [keys]
+    return [keys[name] for name in keys.dtype.names]
+
+
+def _pack_words(base_at, k, n):
+    """Words of n k-mers, where base_at(j) is the array of the n k-mers' j-th base codes."""
+    words = []
+    for off, n_bases in _word_spans(k):
+        word = np.zeros(n, dtype=np.uint64)
+        for j in range(off, off + n_bases):
+            word <<= np.uint64(2)
+            word |= base_at(j)
+        words.append(word)
+    return words
+
+
+def _keys_from_words(words, k):
+    if len(words) == 1:
+        return words[0]
+    keys = np.empty(len(words[0]), dtype=_key_dtype(k))
+    for name, word in zip(keys.dtype.names, words):
+        keys[name] = word
+    return keys
+
+
+def _encode_sequence(seq, k, canonical):
+    """Keys of the k-mers of one sequence (bytes) that are made entirely of A/C/G/T, as in
+    KmerFeatures._extract_kmers_from_file."""
+    b = _BASE_CODE[np.frombuffer(seq, dtype=np.uint8)]
+    n = len(b) - k + 1
+    if n <= 0:
+        return np.zeros(0, dtype=_key_dtype(k))
+    invalid = b == _INVALID
+    n_invalid = np.concatenate(([0], np.cumsum(invalid)))
+    valid = n_invalid[k:] - n_invalid[:-k] == 0
+    b[invalid] = 0
+    words = _pack_words(lambda j: b[j:j + n], k, n)
+    if canonical:
+        # Base j of the reverse complement of the k-mer at i is the complement of base k-1-j
+        comp = 3 - b
+        rc_words = _pack_words(lambda j: comp[k - 1 - j:k - 1 - j + n], k, n)
+        # The reverse complement is smaller where it is smaller in the first word that differs
+        rc_smaller = np.zeros(n, dtype=bool)
+        decided = np.zeros(n, dtype=bool)
+        for fw, rw in zip(words, rc_words):
+            rc_smaller |= ~decided & (rw < fw)
+            decided |= rw != fw
+        words = [np.where(rc_smaller, rw, fw) for fw, rw in zip(words, rc_words)]
+    return _keys_from_words([w[valid] for w in words], k)
+
+
+def _encode_genome(fna_path, k, canonical):
+    """Keys of all k-mers of a FASTA file, in order of appearance."""
+    keys = [_encode_sequence(bytes(record.seq), k, canonical) for record in SeqIO.parse(fna_path, "fasta")]
+    return np.concatenate(keys) if keys else np.zeros(0, dtype=_key_dtype(k))
+
+
+def _encode_strings(kmers, k):
+    """Keys of k-mer strings (already canonical), e.g. the keys of a legacy {kmer: count} pickle."""
+    mat = _BASE_CODE[np.array(kmers, dtype=f"S{k}").view(np.uint8).reshape(-1, k)]
+    if (mat == _INVALID).any():
+        raise ValueError("K-mers must be made of A/C/G/T only.")
+    return _keys_from_words(_pack_words(lambda j: mat[:, j], k, len(mat)), k)
+
+
+def _decode_keys(keys, k, chunk_size=1_000_000):
+    """K-mer strings of the keys."""
+    kmers = []
+    for start in range(0, len(keys), chunk_size):
+        words = _key_columns(keys[start:start + chunk_size])
+        letters = np.empty((len(words[0]), k), dtype=np.uint8)
+        for word, (off, n_bases) in zip(words, _word_spans(k)):
+            for j in range(n_bases):
+                shift = np.uint64(2 * (n_bases - 1 - j))
+                letters[:, off + j] = _CODE_BASE[((word >> shift) & np.uint64(3)).astype(np.intp)]
+        # Slicing one string is much faster than converting a fixed-width array to Python strings
+        text = letters.tobytes().decode("ascii")
+        kmers.extend(text[i:i + k] for i in range(0, len(text), k))
+    return kmers
+
+
+def _sort_order(keys, counts=None):
+    """Order sorting keys ascending; with counts, by count descending first."""
+    cols = _key_columns(keys)
+    if counts is None and len(cols) == 1:
+        return np.argsort(keys, kind="stable")
+    sort_keys = cols[::-1]   # np.lexsort sorts by its last key first
+    if counts is not None:
+        sort_keys.append(-counts.astype(np.int64))
+    return np.lexsort(sort_keys)
+
+
+def _sum_by_key(keys, counts=None):
+    """Unique keys (sorted) and the summed counts of each (counts of 1 if counts is None)."""
+    if len(keys) == 0:
+        return keys, np.zeros(0, dtype=np.int64)
+    order = _sort_order(keys)
+    keys = keys[order]
+    is_new = np.zeros(len(keys), dtype=bool)
+    is_new[0] = True
+    for col in _key_columns(keys):
+        is_new[1:] |= col[1:] != col[:-1]
+    starts = np.flatnonzero(is_new)
+    if counts is None:
+        summed = np.diff(np.append(starts, len(keys))).astype(np.int64)
+    else:
+        summed = np.add.reduceat(counts[order].astype(np.int64), starts)
+    return keys[starts], summed
+
+
+def _partition_of(keys, n_parts):
+    """Partition (0 .. n_parts-1) of each key, from a hash of its words."""
+    h = np.zeros(len(keys), dtype=np.uint64)
+    for col in _key_columns(keys):
+        h ^= col
+    h *= np.uint64(0x9E3779B97F4A7C15)
+    return ((h >> np.uint64(32)) % np.uint64(n_parts)).astype(np.int64)
+
+
+def _part_paths(tmpdir, shard, part):
+    stem = os.path.join(tmpdir, f"shard{shard}_part{part}")
+    return f"{stem}_keys.npy", f"{stem}_counts.npy"
+
+
+def _count_shard(args):
+    """Pool task: count the k-mers of a shard of genomes, and save the counts split into partitions.
+
+    Returns the number of distinct k-mers in the shard."""
+    shard, fna_paths, k, canonical, n_parts, tmpdir = args
+    keys, counts = np.zeros(0, dtype=_key_dtype(k)), np.zeros(0, dtype=np.int64)
+    pending = []
+    for i, fna_path in enumerate(fna_paths):
+        pending.append(_sum_by_key(_encode_genome(fna_path, k, canonical)))
+        if len(pending) == _MERGE_EVERY or i == len(fna_paths) - 1:
+            keys, counts = _sum_by_key(np.concatenate([keys] + [kk for kk, _ in pending]),
+                                       np.concatenate([counts] + [cc for _, cc in pending]))
+            pending = []
+    part = _partition_of(keys, n_parts)
+    order = np.argsort(part, kind="stable")
+    bounds = np.searchsorted(part[order], np.arange(n_parts + 1))
+    for p in range(n_parts):
+        idx = order[bounds[p]:bounds[p + 1]]
+        path_keys, path_counts = _part_paths(tmpdir, shard, p)
+        np.save(path_keys, keys[idx])
+        np.save(path_counts, counts[idx])
+    return len(keys)
+
+
+def _reduce_partition(args):
+    """Pool task: sum one partition's counts over all shards, keeping k-mers seen at least min_freq times.
+
+    Returns (keys, counts, number of distinct k-mers before filtering)."""
+    part, n_shards, tmpdir, min_freq = args
+    keys, counts = [], []
+    for shard in range(n_shards):
+        path_keys, path_counts = _part_paths(tmpdir, shard, part)
+        keys.append(np.load(path_keys))
+        counts.append(np.load(path_counts))
+        os.remove(path_keys)
+        os.remove(path_counts)
+    keys, counts = _sum_by_key(np.concatenate(keys), np.concatenate(counts))
+    n_distinct = len(keys)
+    keep = counts >= min_freq
+    keys, counts = keys[keep], counts[keep]
+    if counts.max(initial=0) <= np.iinfo(np.uint32).max:
+        counts = counts.astype(np.uint32)
+    return keys, counts, n_distinct
+
 class KmerFeatures:
     def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False,
                  min_kmer_freq=2, use_canonical=True, batch_size=500, max_features=None, use_sparse=False,
@@ -58,7 +265,9 @@ class KmerFeatures:
         - batch_size: int, process sequences in batches to manage memory
         - max_features: int, maximum number of features to keep (most frequent)
         - use_sparse: bool, use sparse CSR matrix (True) or dense numpy arrays (False)
-        - path_kmers: str, path to precomputed frequent k-mers dict (pkl file)
+        - path_kmers: str, path to the frequent k-mer counts: an .npz cache of the counting pass (written
+          if missing), or a {kmer: count} pickle (a model's k-mers at inference). A counting cache saved as
+          a pickle before the .npz format is converted once, from the .pkl next to the .npz path.
         - path_full_matrix: str, path to a large, precomputed matrix for sub-sampling
         - cache_features: int, number of top k-mers to build and cache in path_full_matrix, so that runs with
           different max_features can share it (default: max_features). Must be at least max_features.
@@ -108,8 +317,6 @@ class KmerFeatures:
                 os.makedirs(os.path.dirname(self.path_kmers))
                 logging.info(f"Created directory {os.path.dirname(self.path_kmers)} for storing kmers.")
 
-        # For two-pass approach
-        self.kmer_global_counts = Counter()
         self.selected_kmers = set()
 
         if path_kmer_groups:
@@ -141,84 +348,124 @@ class KmerFeatures:
         return kmers
 
     def _count_global_kmers(self, dataset):
-        """First pass: count all k-mers globally for initial filtering.
-        
-        Only called when a pre-computed matrix is not available."""
+        """First pass: count all k-mers globally for initial filtering, and map the top k-mers to columns.
 
-        # Check if precomputed frequent k-mers are available
-        if self.path_kmers:
-            logging.info(f"Loading precomputed frequent k-mers from {self.path_kmers}...")
-            try:
-                with open(self.path_kmers, 'rb') as f:
-                    frequent_kmers = pickle.load(f)
-                logging.info(f"Loaded {len(frequent_kmers)} frequent k-mers from file")
-            except (FileNotFoundError, pickle.PickleError) as e:
-                logging.warning(f"Failed to load precomputed kmers: {e}. Computing from scratch...")
-                frequent_kmers = self._compute_kmers(dataset)
-        else:
-            # Compute frequent k-mers from scratch
-            frequent_kmers = self._compute_kmers(dataset)
-        
-        # "frequent-kmers" contains kmer: total-count after min frequency filtering
-        # Initial selection based on frequency (if cache_features specified; runs keep their top max_features later)
-        if self.cache_features and len(frequent_kmers) > self.cache_features:
-            # Sort so frequent k-mers are first
-            sorted_kmers = sorted(frequent_kmers.items(), key=lambda x: x[1], reverse=True)
-            # Select top N
-            selected_kmers_with_counts = sorted_kmers[:self.cache_features]
-            # Drop the counts, keep only k-mers
-            self.selected_kmers = {kmer for kmer, _ in selected_kmers_with_counts}
+        Only called when a pre-computed matrix is not available."""
+        keys, counts = self._load_kmer_counts()
+        if keys is None:
+            keys, counts = self._compute_kmers(dataset)
+
+        # The sort ensures that column 0 is the most frequent k-mer, 1 is the second, and so on (ties in
+        # k-mer order). Initial selection of the top cache_features (runs keep their top max_features later)
+        order = _sort_order(keys, counts)
+        if self.cache_features and len(order) > self.cache_features:
+            order = order[:self.cache_features]
             logging.info(f"Pre-selected top {self.cache_features} most frequent k-mers")
-        else:
-            # This will get sorted in the next step; order does not matter here
-            self.selected_kmers = set(frequent_kmers.keys())
-        
-        # Create initial k-mer to column mapping
-        # The sort ensures that column 0 is the most frequent k-mer, 1 is the second, and so on.
-        sorted_frequent_kmers = sorted(self.selected_kmers, key=lambda kmer: frequent_kmers.get(kmer, 0), reverse=True)
-        self.kmer_to_col = {kmer: idx for idx, kmer in enumerate(sorted_frequent_kmers)}
-        
+        self.kmer_to_col = {kmer: idx for idx, kmer in enumerate(_decode_keys(keys[order], self.k))}
+
         logging.info(f"Initial feature set: {len(self.kmer_to_col)} k-mers")
-        
+
         # Clear memory
-        del frequent_kmers
+        del keys, counts, order
         gc.collect()
 
     def _compute_kmers(self, dataset):
-        """Compute frequent k-mers from dataset and optionally save to file.
-        
-        If saved, it will be to a pickle of k-mer: total-count dictionary. This is not in sorted order"""
-        logging.info("Computing k-mer frequencies from dataset...")
-        
-        for i, entry in enumerate(tqdm(dataset, desc="Counting k-mers")):
-            kmers = self._extract_kmers_from_file(entry['seq']) # List of all kmers in order of appearance
-            self.kmer_global_counts.update(kmers) # Counter object; counts all kmers across the dataset
-            
-            if i % 100 == 0:
-                gc.collect()    # Periodically clear memory
-        
-        logging.info(f"Found {len(self.kmer_global_counts)} unique k-mers")
-        
-        # Filter by minimum frequency
-        frequent_kmers = {kmer: count for kmer, count in self.kmer_global_counts.items() if count >= self.min_kmer_freq}
-        
-        logging.info(f"After frequency filtering (min_freq={self.min_kmer_freq}): {len(frequent_kmers)} k-mers")
-        
-        # Save frequent k-mers to file if path is provided
-        if self.path_kmers:
-            self._save_frequent_kmers(frequent_kmers, self.path_kmers)
-        
-        # Clear global counts to free memory
-        self.kmer_global_counts.clear()
-        
-        return frequent_kmers
+        """Count the k-mers of the dataset in parallel, keeping those seen at least min_kmer_freq times.
 
-    def _save_frequent_kmers(self, frequent_kmers, filepath):
-        """Save frequent k-mers dictionary to pickle file."""
+        Each worker counts a shard of the genomes and saves its counts split into partitions (by k-mer);
+        then each worker sums one partition over all shards, so no process holds every distinct k-mer.
+        Returns (keys, counts), unsorted, and saves them to path_kmers if it is an .npz path."""
+        logging.info("Computing k-mer frequencies from dataset...")
+        fna_paths = [entry['seq'] for entry in dataset]
+        n_shards = max(1, min(NUM_PROC, len(fna_paths)))
+        # Shard and partition files go to the node's local disk when running under SLURM
+        tmp_parent = os.environ.get("SLURM_TMPDIR") or (os.path.dirname(self.path_kmers) if self.path_kmers else None)
+        tmpdir = tempfile.mkdtemp(prefix="kmer_counts_", dir=tmp_parent)
         try:
-            with open(filepath, 'wb') as f:
-                pickle.dump(frequent_kmers, f, protocol=pickle.HIGHEST_PROTOCOL)
-            logging.info(f"Saved frequent k-mers dictionary to {filepath}")
+            with Pool(processes=n_shards) as pool:
+                shard_args = [(shard, fna_paths[shard::n_shards], self.k, self.use_canonical, n_shards, tmpdir)
+                              for shard in range(n_shards)]
+                for _ in tqdm(pool.imap_unordered(_count_shard, shard_args), total=n_shards,
+                              desc=f"Counting k-mers ({n_shards} shards of ~{len(fna_paths) // n_shards} genomes)"):
+                    pass
+                part_args = [(part, n_shards, tmpdir, self.min_kmer_freq) for part in range(n_shards)]
+                parts = list(tqdm(pool.imap_unordered(_reduce_partition, part_args), total=n_shards,
+                                  desc="Merging k-mer counts"))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+        logging.info(f"Found {sum(n for _, _, n in parts)} unique k-mers")
+        keys = np.concatenate([part_keys for part_keys, _, _ in parts])
+        counts = np.concatenate([part_counts for _, part_counts, _ in parts])
+        del parts
+        logging.info(f"After frequency filtering (min_freq={self.min_kmer_freq}): {len(keys)} k-mers")
+
+        if self.path_kmers and self.path_kmers.endswith(".npz"):
+            self._save_kmer_counts(keys, counts, self.path_kmers)
+        return keys, counts
+
+    def _load_kmer_counts(self):
+        """Frequent k-mer counts from path_kmers as (keys, counts), or (None, None) if there are none."""
+        path = self.path_kmers
+        if not path:
+            return None, None
+        try:
+            if not path.endswith(".npz"):
+                return self._load_kmer_pickle(path)
+            if os.path.exists(path):
+                return self._load_kmer_npz(path)
+            path_legacy = path[:-len(".npz")] + ".pkl"
+            if os.path.exists(path_legacy):
+                logging.info(f"Converting the k-mer counts in {path_legacy} to {path} (one-time conversion)...")
+                keys, counts = self._load_kmer_pickle(path_legacy)
+                self._save_kmer_counts(keys, counts, path)
+                logging.info(f"{path_legacy} is no longer used and can be deleted.")
+                return keys, counts
+        except (OSError, pickle.PickleError, ValueError, KeyError) as e:
+            logging.warning(f"Failed to load precomputed kmers: {e}. Computing from scratch...")
+        return None, None
+
+    def _load_kmer_npz(self, path):
+        """Counts saved by _save_kmer_counts; (None, None) if they were counted with other settings."""
+        logging.info(f"Loading precomputed frequent k-mers from {path}...")
+        with np.load(path) as data:
+            k, canonical, min_freq = int(data['k']), bool(data['use_canonical']), int(data['min_kmer_freq'])
+            if (k, canonical) != (self.k, self.use_canonical) or min_freq > self.min_kmer_freq:
+                logging.warning(f"{path} was counted with k={k}, use_canonical={canonical}, min_kmer_freq="
+                                f"{min_freq}, which does not match this run. Computing from scratch...")
+                return None, None
+            keys, counts = data['keys'], data['counts']
+        if min_freq < self.min_kmer_freq:
+            keep = counts >= self.min_kmer_freq
+            keys, counts = keys[keep], counts[keep]
+        logging.info(f"Loaded {len(keys)} frequent k-mers from file")
+        return keys, counts
+
+    def _load_kmer_pickle(self, path, chunk_size=1_000_000):
+        """A {kmer: count} pickle as (keys, counts). Its counts are used as they are (not filtered)."""
+        logging.info(f"Loading precomputed frequent k-mers from {path}...")
+        with open(path, 'rb') as f:
+            frequent_kmers = pickle.load(f)
+        logging.info(f"Loaded {len(frequent_kmers)} frequent k-mers from file")
+        kmers = list(frequent_kmers)
+        counts = np.fromiter(frequent_kmers.values(), dtype=np.int64, count=len(kmers))
+        del frequent_kmers
+        if kmers and len(kmers[0]) != self.k:
+            raise ValueError(f"{path} holds k-mers of length {len(kmers[0])}, not k={self.k}.")
+        keys = [_encode_strings(kmers[i:i + chunk_size], self.k) for i in range(0, len(kmers), chunk_size)]
+        keys = np.concatenate(keys) if keys else np.zeros(0, dtype=_key_dtype(self.k))
+        return keys, counts
+
+    def _save_kmer_counts(self, keys, counts, filepath):
+        """Save the frequent k-mer counts as arrays (written to a temporary file first, so an interrupted
+        save leaves no cache)."""
+        try:
+            path_tmp = filepath + ".tmp"
+            with open(path_tmp, 'wb') as f:
+                np.savez(f, keys=keys, counts=counts, k=self.k, use_canonical=self.use_canonical,
+                         min_kmer_freq=self.min_kmer_freq)
+            os.replace(path_tmp, filepath)
+            logging.info(f"Saved frequent k-mer counts to {filepath}")
         except Exception as e:
             logging.warning(f"Failed to save frequent k-mers: {e}")
 
