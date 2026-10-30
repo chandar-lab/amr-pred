@@ -77,15 +77,16 @@ def main(cfg: DictConfig):
     # run a terminal command to download the assemblies
     # for more info: https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/genomes/large-download/
     for assembly in tqdm(assemblies, desc="Downloading genomes from NCBI"):
-        # Check if the assembly directory already exists
+        # Skip assemblies whose genome file is already present. Checking for the directory alone is not
+        # enough: scratch cleaning can delete the .fna files and leave the empty directories behind.
         assembly_dir = os.path.join(path_output, assembly)
-        if os.path.exists(assembly_dir):
-            logger.info(f"Directory {assembly_dir} already exists. Skipping download for {assembly}.")
+        if glob.glob(os.path.join(assembly_dir, "ncbi_dataset", "data", assembly, "*.fna")):
+            logger.info(f"Genome for {assembly} already exists in {assembly_dir}. Skipping download.")
             continue
         # 1. run the command to download the assembly
         os.system(f"datasets download genome accession {assembly} --dehydrated --include genome,seq-report --filename {assembly}.zip")
         # 2. unzip the file
-        os.system(f"unzip {assembly}.zip -d {path_output}/{assembly}")
+        os.system(f"unzip -o {assembly}.zip -d {path_output}/{assembly}")
         # 3. rehydrate the file
         os.system(f"datasets rehydrate --directory {path_output}/{assembly}")
         # 4. remove the zip file
