@@ -492,6 +492,8 @@ class KmerFeatures:
             else:
                 X_full, y = self._build_from_scratch(dataset)
                 kmers = self._kmers_in_column_order(self.kmer_to_col, X_full.shape[1])
+                # The k-mers are kept in column order in self.kmers; free the large lookup structures
+                self.kmer_to_col, self.selected_kmers = {}, set()
                 self.rep_cols, self.group_of, X, self.const_values = group_columns(
                     lambda: iter_dense_rows(X_full), *X_full.shape, X_full.dtype)
                 del X_full
@@ -536,15 +538,13 @@ class KmerFeatures:
         return X, y
 
     def _take_grouped_prefix(self, X):
-        """Keep the grouped columns of the top max_features k-mers, and set kmer_to_col and group_sizes."""
+        """Keep the grouped columns of the top max_features k-mers, and set group_sizes."""
         n_total = len(self.group_of)
         self.n_prefix = min(self.max_features, n_total) if self.max_features else n_total
         n_kept, self.group_sizes = prefix_groups(self.rep_cols, self.group_of, self.n_prefix)
         self.constant_sq_norm = constant_sq_norm(self.const_values, self.n_prefix)
         if n_kept < X.shape[1]:
             X = X[:, :n_kept]   # a view: on a memory-mapped matrix, only these columns are ever read
-        rep_kmers = self.kmers[self.rep_cols[:n_kept]].astype(str).tolist()
-        self.kmer_to_col = {kmer: j for j, kmer in enumerate(rep_kmers)}
         logging.info(f"Using {n_kept:,} grouped columns for the top {self.n_prefix:,} k-mers. Matrix shape: {X.shape}")
         return X
 
@@ -703,6 +703,9 @@ class KmerFeatures:
         """Return list of k-mer features in column order."""
         if self.inference_groups:
             return list(self.representatives)
+        if self.group_sizes is not None:
+            # Grouped training: each column's representative k-mer
+            return self.kmers[self.rep_cols[:len(self.group_sizes)]].astype(str).tolist()
         if not self.kmer_to_col:
             return []
         return [kmer for kmer, _ in sorted(self.kmer_to_col.items(), key=lambda x: x[1])]
