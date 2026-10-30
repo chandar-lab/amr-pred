@@ -2,7 +2,7 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from collections import Counter
 from Bio import SeqIO
-from multiprocessing import Pool
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 import psutil
 from tqdm import tqdm
 import logging
@@ -35,6 +35,21 @@ _worker_features = None
 def _init_worker(kmer_features):
     global _worker_features
     _worker_features = kmer_features
+
+
+def _imap_unordered(pool, fn, args):
+    """Results of fn over args, in completion order. Unlike multiprocessing.Pool, a ProcessPoolExecutor
+    whose worker dies (e.g. killed for using too much memory) raises BrokenProcessPool instead of hanging."""
+    pending = {pool.submit(fn, arg) for arg in args}
+    try:
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                yield future.result()
+            del done, future  # do not keep results alive while waiting for the next ones
+    finally:
+        for future in pending:
+            future.cancel()
 
 
 def _process_entry(args):
@@ -274,7 +289,8 @@ class KmerFeatures:
         - cache_features: int, number of top k-mers to build and cache in path_full_matrix, so that runs with
           different max_features can share it (default: max_features). Must be at least max_features.
         - group_columns: bool, merge columns that are identical across all genomes and drop constant
-          columns (training only; see features/column_groups.py). Dense matrices only.
+          columns (training only; see features/column_groups.py). Dense matrices only. Only the grouped
+          matrix is saved; an existing path_full_matrix is still read, to group it.
         - path_kmer_groups: str, path to the k-mer groups saved with a grouped model (inference only).
           Each column's value is the median over its member k-mers, counting absent members as 0.
         """
@@ -385,14 +401,14 @@ class KmerFeatures:
         tmp_parent = os.environ.get("SLURM_TMPDIR") or (os.path.dirname(self.path_kmers) if self.path_kmers else None)
         tmpdir = tempfile.mkdtemp(prefix="kmer_counts_", dir=tmp_parent)
         try:
-            with Pool(processes=n_shards) as pool:
+            with ProcessPoolExecutor(max_workers=n_shards) as pool:
                 shard_args = [(shard, fna_paths[shard::n_shards], self.k, self.use_canonical, n_shards, tmpdir)
                               for shard in range(n_shards)]
-                for _ in tqdm(pool.imap_unordered(_count_shard, shard_args), total=n_shards,
+                for _ in tqdm(_imap_unordered(pool, _count_shard, shard_args), total=n_shards,
                               desc=f"Counting k-mers ({n_shards} shards of ~{len(fna_paths) // n_shards} genomes)"):
                     pass
                 part_args = [(part, n_shards, tmpdir, self.min_kmer_freq) for part in range(n_shards)]
-                parts = list(tqdm(pool.imap_unordered(_reduce_partition, part_args), total=n_shards,
+                parts = list(tqdm(_imap_unordered(pool, _reduce_partition, part_args), total=n_shards,
                                   desc="Merging k-mer counts"))
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -469,7 +485,7 @@ class KmerFeatures:
 
     def _worker_pool(self):
         """Pool whose workers receive this object (with its k-mer -> column map) once, at startup."""
-        return Pool(processes=NUM_PROC, initializer=_init_worker, initargs=(self,))
+        return ProcessPoolExecutor(max_workers=NUM_PROC, initializer=_init_worker, initargs=(self,))
 
     def _process_sequence_batch_sparse(self, batch, start_row_idx, pool):
         """
@@ -484,7 +500,7 @@ class KmerFeatures:
         worker_args = [(i, entry['seq']) for i, entry in enumerate(batch)]
 
         for rel_row_idx, row_cols, row_vals in tqdm(
-            pool.imap_unordered(_process_entry, worker_args),
+            _imap_unordered(pool, _process_entry, worker_args),
             total=len(worker_args),
             desc=f"Processing sparse batch ({NUM_PROC} processes)",
         ):
@@ -572,7 +588,7 @@ class KmerFeatures:
         worker_args = [(i, entry['seq']) for i, entry in enumerate(batch)]
 
         for row_idx, cols, vals in tqdm(
-            pool.imap_unordered(_process_entry, worker_args),
+            _imap_unordered(pool, _process_entry, worker_args),
             total=len(worker_args),
             desc=f"Processing dense batch ({NUM_PROC} processes)",
         ):
@@ -733,8 +749,8 @@ class KmerFeatures:
                             f"{self.cache_features}.")
         return enough
 
-    def _build_from_scratch(self, dataset):
-        """Count k-mers, build the feature matrix and save it to path_full_matrix (if given)."""
+    def _build_from_scratch(self, dataset, save=True):
+        """Count k-mers, build the feature matrix and save it to path_full_matrix (if given and save)."""
         logging.info("No precomputed matrix found, building from scratch...")
         
         # Step 1: Count and filter k-mers (inference with k-mer groups already has its columns)
@@ -751,7 +767,7 @@ class KmerFeatures:
             X, y = self._build_dense_matrix(dataset)
         
         # Save the newly built matrix as a 'full' matrix for future runs
-        if self.path_full_matrix:
+        if save and self.path_full_matrix:
             logging.info(f"Saving the newly built matrix to {self.path_full_matrix} for future use.")
             self.save_matrix(X, y, self.path_full_matrix)
 
@@ -778,7 +794,8 @@ class KmerFeatures:
                 X, y = self._group_cached_matrix(self.path_full_matrix)
                 n_kmers_cap = self._cache_columns(self.path_full_matrix)[1]
             else:
-                X_full, y = self._build_from_scratch(dataset)
+                # Only the grouped matrix is cached: the ungrouped one is large and slow to save
+                X_full, y = self._build_from_scratch(dataset, save=False)
                 kmers = self._kmers_in_column_order(self.kmer_to_col, X_full.shape[1])
                 # The k-mers are kept in column order in self.kmers; free the large lookup structures
                 self.kmer_to_col, self.selected_kmers = {}, set()
