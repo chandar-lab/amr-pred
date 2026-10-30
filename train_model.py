@@ -26,6 +26,9 @@ from training.sweep_utils import OptunaFoldTrainer
 # Set up logging
 logger = logging.getLogger(__name__)
 
+# Runs with a feature limit share one cached matrix of the top CACHE_FEATURES k-mers, and take their top max_features from it
+CACHE_FEATURES = 10_000_000
+
 
 def save_model_kmers(kmer_features, path_models, patho_short, antibiotic, k, feat):
     """Save the k-mers needed at inference: the k-mer groups for grouped runs, else the k-mer list."""
@@ -243,6 +246,8 @@ def main(cfg: DictConfig):
     patho_short = f"{pathogen.split('_')[0][0]}_{pathogen.split('_')[1]}"
     feat =  "full" if max_features is None else f"{(max_features//1000)}K"
     fname = f"{patho_short}__{antibiotic}__k_{k}__mode_{feature_mode}"
+    cache_features = None if max_features is None else CACHE_FEATURES
+    cache_feat = "full" if cache_features is None else f"{cache_features // 1_000_000}M"
 
 
     logger.info(f"Training on {pathogen} for {antibiotic} using k-mers of length {k} ...")
@@ -265,7 +270,8 @@ def main(cfg: DictConfig):
         use_canonical=True,
         use_sparse=cfg.dataset.use_sparse,                      # Use sparse matrix for k-mer features
         reduce_dimensionality=False,                            # This is the "leaky" SVD that acts on both train and test, so it's not currently used.
-        path_full_matrix=os.path.join(path_species, "feature_matrices", f"{fname}__feat_{'10M' if max_features is not None else 'full'}{'__sparse' if cfg.dataset.use_sparse else ''}.npz"),
+        path_full_matrix=os.path.join(path_species, "feature_matrices", f"{fname}__feat_{cache_feat}{'__sparse' if cfg.dataset.use_sparse else ''}.npz"),
+        cache_features=cache_features,                          # Build the shared cache at its full size
         path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.pkl"),
         group_columns=cfg.matrix.group_columns,                 # Merge identical columns, drop constant ones
     )

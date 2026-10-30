@@ -28,7 +28,8 @@ NON_ACGT = re.compile(r"[^ACGT]+")
 class KmerFeatures:
     def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False,
                  min_kmer_freq=2, use_canonical=True, batch_size=500, max_features=None, use_sparse=False,
-                 path_kmers=None, path_full_matrix=None, group_columns=False, path_kmer_groups=None):
+                 path_kmers=None, path_full_matrix=None, cache_features=None, group_columns=False,
+                 path_kmer_groups=None):
         """
         Memory-efficient k-mer feature extraction with advanced feature selection.
         
@@ -44,6 +45,8 @@ class KmerFeatures:
         - use_sparse: bool, use sparse CSR matrix (True) or dense numpy arrays (False)
         - path_kmers: str, path to precomputed frequent k-mers dict (pkl file)
         - path_full_matrix: str, path to a large, precomputed matrix for sub-sampling
+        - cache_features: int, number of top k-mers to build and cache in path_full_matrix, so that runs with
+          different max_features can share it (default: max_features). Must be at least max_features.
         - group_columns: bool, merge columns that are identical across all genomes and drop constant
           columns (training only; see features/column_groups.py). Dense matrices only.
         - path_kmer_groups: str, path to the k-mer groups saved with a grouped model (inference only).
@@ -65,6 +68,10 @@ class KmerFeatures:
         self.use_sparse = use_sparse
         self.path_kmers = path_kmers
         self.path_full_matrix = path_full_matrix
+        if cache_features is not None and (max_features is None or cache_features < max_features):
+            raise ValueError(f"cache_features ({cache_features}) must be at least max_features ({max_features}).")
+        # Number of top k-mers to build (and cache); None keeps all frequent k-mers
+        self.cache_features = (cache_features or max_features) if path_full_matrix else max_features
         self.group_columns = group_columns
         self.path_kmer_groups = path_kmer_groups
         self.group_sizes = None         # number of k-mers merged into each column (grouped runs only)
@@ -137,15 +144,15 @@ class KmerFeatures:
             frequent_kmers = self._compute_kmers(dataset)
         
         # "frequent-kmers" contains kmer: total-count after min frequency filtering
-        # Initial selection based on frequency (if max_features specified)
-        if self.max_features and len(frequent_kmers) > self.max_features:
+        # Initial selection based on frequency (if cache_features specified; runs keep their top max_features later)
+        if self.cache_features and len(frequent_kmers) > self.cache_features:
             # Sort so frequent k-mers are first
             sorted_kmers = sorted(frequent_kmers.items(), key=lambda x: x[1], reverse=True)
             # Select top N
-            selected_kmers_with_counts = sorted_kmers[:self.max_features]
+            selected_kmers_with_counts = sorted_kmers[:self.cache_features]
             # Drop the counts, keep only k-mers
             self.selected_kmers = {kmer for kmer, _ in selected_kmers_with_counts}
-            logging.info(f"Pre-selected top {self.max_features} most frequent k-mers")
+            logging.info(f"Pre-selected top {self.cache_features} most frequent k-mers")
         else:
             # This will get sorted in the next step; order does not matter here
             self.selected_kmers = set(frequent_kmers.keys())
@@ -379,37 +386,19 @@ class KmerFeatures:
             return self._build_grouped_matrix(dataset)
         
         # --- NEW: Priority 1 - Load and sub-sample from a full matrix ---
-        if self.path_full_matrix and os.path.exists(self.path_full_matrix):
+        if self._usable_cache(self.path_full_matrix):
             logging.info(f"Loading full feature matrix from {self.path_full_matrix} to sub-sample...")
-            X_full, y = self.load_matrix(self.path_full_matrix)  # This also loads the full kmer_to_col map
+            X, y = self.load_matrix(self.path_full_matrix)  # This also loads the full kmer_to_col map
+        else:
+            # --- Fallback: Build matrix from scratch (and cache it) ---
+            X, y = self._build_from_scratch(dataset)
 
-            n_features_full = X_full.shape[1]
-            
-            if self.max_features and self.max_features < n_features_full:
-                logging.info(f"Sub-sampling to top {self.max_features} features from {n_features_full} total features.")
-                
-                # Columns are already ordered by k-mer frequency, so we can slice directly
-                X_sub = X_full[:, :self.max_features].copy()
-                del X_full
-                gc.collect()
-                
-                # Update the k-mer map to reflect the sub-sampling
-                col_to_kmer_full = {v: k for k, v in self.kmer_to_col.items()}
-                self.kmer_to_col = {col_to_kmer_full[i]: i for i in range(self.max_features)}
-                
-                logging.info(f"Sub-sampled matrix shape: {X_sub.shape}")
-                if self.reduce_dim:
-                    logging.info("Applying dimensionality reduction using SVD...")
-                    _, _, X_reduced = efficient_svd(X_sub)
-                    return X_reduced, y
-                return X_sub, y
-            else:
-                logging.info("Using the full pre-loaded matrix as max_features is not smaller.")
-                if self.reduce_dim:
-                    logging.info("Applying dimensionality reduction using SVD...")
-                    _, _, X_reduced = efficient_svd(X_full)
-                    return X_reduced, y
-                return X_full, y
+        X = self._take_top_columns(X)
+        if self.reduce_dim:
+            logging.info("Applying dimensionality reduction using SVD...")
+            _, _, X_reduced = efficient_svd(X)
+            return X_reduced, y
+        return X, y
 
         # # --- EXISTING: Priority 2 - Load from standard precomputed file ---
         # if self.path_precomputed:
@@ -417,15 +406,54 @@ class KmerFeatures:
         #     X, y = self.load_matrix(self.path_precomputed)
         #     return X, y
 
-        # --- Fallback: Build matrix from scratch ---
-        X, y = self._build_from_scratch(dataset)
+    def _take_top_columns(self, X):
+        """Keep the columns of the top max_features k-mers (columns are ordered by k-mer frequency)."""
+        n_features_full = X.shape[1]
+        if not self.max_features or self.max_features >= n_features_full:
+            logging.info(f"Using all {n_features_full:,} columns of the matrix (max_features={self.max_features}).")
+            return X
+        logging.info(f"Sub-sampling to top {self.max_features} features from {n_features_full} total features.")
+        X_sub = X[:, :self.max_features].copy()
+        # Update the k-mer map to reflect the sub-sampling
+        col_to_kmer_full = {v: k for k, v in self.kmer_to_col.items()}
+        self.kmer_to_col = {col_to_kmer_full[i]: i for i in range(self.max_features)}
+        logging.info(f"Sub-sampled matrix shape: {X_sub.shape}")
+        return X_sub
 
-        if self.reduce_dim:
-            logging.info("Applying dimensionality reduction using SVD...")
-            _, _, X_reduced = efficient_svd(X)
-            return X_reduced, y
-            
-        return X, y
+    @staticmethod
+    def _cache_columns(filepath):
+        """Number of k-mer columns of a cached matrix and the k-mer cap it was built with, read without
+        loading the matrix. The cap is 0 for no cap, and -1 for caches saved before the cap was recorded."""
+        with np.load(filepath, allow_pickle=True) as data:
+            n_kmers_cap = int(data['n_kmers_cap']) if 'n_kmers_cap' in data else -1
+            matrix_type = str(data['matrix_type']) if 'matrix_type' in data else ('dense' if 'matrix' in data else 'sparse')
+            if matrix_type == 'grouped':
+                return len(data['group_of']), n_kmers_cap   # group_of has one entry per ungrouped column
+            if matrix_type == 'sparse':
+                return int(data['shape'][1]), n_kmers_cap
+        return npz_array_header(filepath)[0][1], n_kmers_cap
+
+    def _usable_cache(self, filepath):
+        """Whether the cached matrix at filepath exists and holds the top max_features k-mers.
+
+        A cache with fewer columns than its cap holds every frequent k-mer (e.g. small k), so it is enough
+        for any max_features."""
+        if not filepath or not os.path.exists(filepath):
+            return False
+        n_cols, n_kmers_cap = self._cache_columns(filepath)
+        if self.max_features is not None and n_cols >= self.max_features:
+            return True
+        if n_kmers_cap == -1:
+            # Caches without a recorded cap were built with max_features=None when no limit was set
+            enough = self.max_features is None
+        else:
+            enough = n_kmers_cap == 0 or n_cols < n_kmers_cap
+        if not enough:
+            cap = "unknown" if n_kmers_cap == -1 else f"{n_kmers_cap:,}"
+            logging.warning(f"Cached matrix {filepath} has {n_cols:,} columns (k-mer cap: {cap}), fewer than "
+                            f"max_features={self.max_features}; it will be rebuilt with cache_features="
+                            f"{self.cache_features}.")
+        return enough
 
     def _build_from_scratch(self, dataset):
         """Count k-mers, build the feature matrix and save it to path_full_matrix (if given)."""
@@ -463,13 +491,14 @@ class KmerFeatures:
 
         Uses the grouped cache if present, else groups the ungrouped cache (streamed, without
         loading it into memory), else builds from scratch and groups the result."""
-        if self.path_grouped_matrix and os.path.exists(self.path_grouped_matrix):
+        if self._usable_cache(self.path_grouped_matrix):
             logging.info(f"Loading grouped feature matrix from {self.path_grouped_matrix}...")
             X, y = self._load_grouped_matrix(self.path_grouped_matrix)
         else:
-            if self.path_full_matrix and os.path.exists(self.path_full_matrix):
+            if self._usable_cache(self.path_full_matrix):
                 logging.info(f"Grouping the columns of {self.path_full_matrix} (one-time conversion)...")
                 X, y = self._group_cached_matrix(self.path_full_matrix)
+                n_kmers_cap = self._cache_columns(self.path_full_matrix)[1]
             else:
                 X_full, y = self._build_from_scratch(dataset)
                 kmers = self._kmers_in_column_order(self.kmer_to_col, X_full.shape[1])
@@ -478,8 +507,9 @@ class KmerFeatures:
                 del X_full
                 gc.collect()
                 self.kmers = kmers
+                n_kmers_cap = self.cache_features or 0
             if self.path_grouped_matrix:
-                self._save_grouped_matrix(X, y, self.path_grouped_matrix)
+                self._save_grouped_matrix(X, y, self.path_grouped_matrix, n_kmers_cap)
 
         X = self._take_grouped_prefix(X)
         if self.reduce_dim:
@@ -529,12 +559,13 @@ class KmerFeatures:
         members = members_of_groups(self.group_of, self.n_prefix, len(self.group_sizes))
         return [self.kmers[cols].astype(str).tolist() for cols in members]
 
-    def _save_grouped_matrix(self, X, y, filepath):
+    def _save_grouped_matrix(self, X, y, filepath, n_kmers_cap):
+        """n_kmers_cap is the k-mer cap of the ungrouped matrix (see _cache_columns)."""
         logging.info(f"Saving grouped matrix with shape {X.shape} to {filepath}")
         os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
         np.savez_compressed(filepath, matrix_type='grouped', matrix=X, labels=y,
                             rep_cols=self.rep_cols, group_of=self.group_of, kmers=self.kmers,
-                            const_values=self.const_values)
+                            const_values=self.const_values, n_kmers_cap=n_kmers_cap)
 
     def _load_grouped_matrix(self, filepath):
         with np.load(filepath) as data:
@@ -671,7 +702,8 @@ class KmerFeatures:
                                 dtype=str(X.dtype),
                                 labels=y,
                                 kmer_to_col=self.kmer_to_col,
-                                use_sparse=self.use_sparse)
+                                use_sparse=self.use_sparse,
+                                n_kmers_cap=self.cache_features or 0)
         else:  # Dense matrix
             logging.info(f"Saving dense matrix with shape {X.shape}")
             np.savez_compressed(filepath, 
@@ -679,7 +711,8 @@ class KmerFeatures:
                                 matrix=X, 
                                 labels=y,
                                 kmer_to_col=self.kmer_to_col,
-                                use_sparse=self.use_sparse)
+                                use_sparse=self.use_sparse,
+                                n_kmers_cap=self.cache_features or 0)
 
         logging.info(f"Saved matrix and k-mer mapping to {filepath}")           
 
