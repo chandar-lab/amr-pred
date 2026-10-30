@@ -15,6 +15,9 @@ params:
   min_samples_leaf: 1
   max_features: sqrt
 
+# Sweep trials run at once: random forests use all CPUs (n_jobs: -1) themselves
+sweep_n_jobs: 1
+
 # Define hyperparameters for the sweep
 sweep:
   method: bayes

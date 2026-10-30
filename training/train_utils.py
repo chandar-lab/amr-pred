@@ -1,6 +1,8 @@
 import json
 import os
 
+import joblib
+
 from sklearn.metrics import confusion_matrix
 
 from features.column_groups import regroup_fold
@@ -62,6 +64,29 @@ def load_fold_checkpoint(checkpoint_dir, fold_idx):
     with open(path, "r") as f:
         payload = json.load(f)
     return payload["result"], payload["predictions"]
+
+
+def full_checkpoint_path(checkpoint_dir):
+    return os.path.join(checkpoint_dir, "full_model.joblib")
+
+
+def save_full_checkpoint(checkpoint_dir, model, idf):
+    """Save the model trained on the full dataset, with its TF-IDF idf (None if unused)."""
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    path = full_checkpoint_path(checkpoint_dir)
+    tmp_path = f"{path}.tmp"
+    joblib.dump({"model": model, "idf": idf}, tmp_path)
+    os.replace(tmp_path, path)
+    return path
+
+
+def load_full_checkpoint(checkpoint_dir):
+    """Return (model, idf) of the full-dataset model, or None if it has no checkpoint."""
+    path = full_checkpoint_path(checkpoint_dir)
+    if not os.path.isfile(path):
+        return None
+    payload = joblib.load(path)
+    return payload["model"], payload["idf"]
 
 
 class FoldFeatures:

@@ -1,7 +1,10 @@
 import math
 import gc
+import os
 
+import numpy as np
 import optuna
+import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.base import clone
@@ -23,6 +26,26 @@ class OptunaFoldTrainer:
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(
             X_train, y_train, test_size=0.2, random_state=self.config["seed"], stratify=y_train
         )
+        self._dtrain = None     # XGBoost training data, quantized once and reused by every trial
+
+    # Sweeping one of these changes how the training data is quantized, so it cannot be reused across trials
+    _XGB_DATA_PARAMS = {"max_bin", "missing", "enable_categorical", "feature_types"}
+
+    def _reuse_xgb_data(self):
+        """Whether trials can share one QuantileDMatrix (plain XGBClassifier fits, as in XGBClassifier.fit)."""
+        return (isinstance(self.model, xgb.XGBClassifier)
+                and self.model.early_stopping_rounds is None and self.model.callbacks is None
+                and not self._XGB_DATA_PARAMS & set(self._valid_sweep_parameters()))
+
+    def _xgb_trial_predict(self, model):
+        """Train and predict like XGBClassifier.fit/predict on binary 0/1 labels, but on the shared training data."""
+        if self._dtrain is None:
+            self._dtrain = xgb.QuantileDMatrix(self.X_train, self.y_train, missing=self.model.missing,
+                                               max_bin=self.model.max_bin, nthread=self.model.n_jobs)
+        with xgb.config_context(verbosity=model.verbosity):
+            booster = xgb.train(model.get_xgb_params(), self._dtrain, model.get_num_boosting_rounds())
+            probs = booster.inplace_predict(self.X_val)
+        return (probs > 0.5).astype(np.int64)
 
     @property
     def direction(self):
@@ -94,21 +117,27 @@ class OptunaFoldTrainer:
         if model_params:
             model.set_params(**model_params)
 
-        model.fit(self.X_train, self.y_train)
-        val_preds = model.predict(self.X_val)
+        if self._reuse_xgb_data():
+            val_preds = self._xgb_trial_predict(model)
+        else:
+            model.fit(self.X_train, self.y_train)
+            val_preds = model.predict(self.X_val)
         val_acc = balanced_accuracy_score(self.y_val, val_preds)
         trial.set_user_attr("val_balanced_accuracy", val_acc)
         
         del model, val_preds
         return val_acc
 
-    def optimize(self, n_trials, study_name=None):
+    def optimize(self, n_trials, study_name=None, n_jobs=1):
+        """n_jobs trials run at once in threads (-1: all CPUs of the job). Use it for single-threaded models."""
+        if n_jobs == -1:
+            n_jobs = len(os.sched_getaffinity(0))
         study = optuna.create_study(
             direction=self.direction,
             sampler=self._make_sampler(),
             study_name=study_name,
         )
-        study.optimize(self._objective, n_trials=n_trials)
+        study.optimize(self._objective, n_trials=n_trials, n_jobs=n_jobs)
 
         best_trial = study.best_trial
         self.best_val_acc = best_trial.value
@@ -121,6 +150,7 @@ class OptunaFoldTrainer:
         # Free validation splits from memory once optimization finishes
         if hasattr(self, 'X_train'):
             del self.X_train, self.X_val, self.y_train, self.y_val
+        self._dtrain = None
         gc.collect()
         
         return study

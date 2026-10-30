@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import random
+import subprocess
 import joblib
 import wandb
 import gc
@@ -20,11 +21,20 @@ from features.kmer import KmerFeatures
 from features.utils import plot_umap, efficient_svd, train_val_svd, compute_idf, apply_tfidf
 from data.data_utils import load_data
 from data.generate_phylogeny_folds import get_genomic_folds
-from training.train_utils import compute_major_errors, load_fold_checkpoint, save_fold_checkpoint, FoldFeatures
+from training.train_utils import (
+    compute_major_errors, load_fold_checkpoint, save_fold_checkpoint,
+    load_full_checkpoint, save_full_checkpoint, FoldFeatures,
+)
 from training.sweep_utils import OptunaFoldTrainer
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# Columns of the per-fold results CSV, in order
+RESULT_COLUMNS = [
+    "model_name", "pathogen", "pathogen_short", "antibiotic", "k", "feat_mode", "max_features", "seed",
+    "split_method", "clustering", "fold", "balanced_accuracy", "f1_macro", "very_major_error", "major_error", "fold_time",
+]
 
 # Runs with a feature limit share one cached matrix of the top CACHE_FEATURES k-mers, and take their top max_features from it
 CACHE_FEATURES = 10_000_000
@@ -47,7 +57,24 @@ def save_model_kmers(kmer_features, path_models, patho_short, antibiotic, k, mod
         pickle.dump(payload, f)
 
 
-def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, sweep_config=None, fixed_run_config=None, checkpoint_dir=None, fold_features=None):
+def resolve_device(device):
+    """Device for models that support one (XGBoost): "auto" is "cuda" when a GPU is visible, else "cpu"."""
+    if device != "auto":
+        return device
+    try:
+        out = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return "cpu"
+    return "cuda" if out.returncode == 0 and "GPU" in out.stdout else "cpu"
+
+
+def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, sweep_config=None, fixed_run_config=None, checkpoint_dir=None, fold_features=None, only_fold=None):
+    """
+    Cross-validate the estimator and train the final model on the full dataset.
+
+    With only_fold (a fold index, or "full" for the final model), train just that part, save its
+    checkpoint and return None. A later run without only_fold loads the checkpoints and writes the results.
+    """
     modelname = config.model.name if not config.matrix.reduce_dimensionality else f"{config.model.name}_svd"
     modelname += f"_sub{int(config.matrix.subsample_frac*100)}" if config.matrix.subsample_frac < 1.0 else ""
     modelname += "_grp" if config.matrix.group_columns else ""
@@ -59,7 +86,10 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     best_overall_score = -1
     best_classification_report = ""
 
+    sweep_n_jobs = config.model.get("sweep_n_jobs", 1)
     for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
+        if only_fold is not None and fold_idx != only_fold:
+            continue
         if checkpoint_dir:
             checkpoint = load_fold_checkpoint(checkpoint_dir, fold_idx)
             if checkpoint is not None:
@@ -69,7 +99,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
                 logger.info(f"Fold {fold_idx+1} checkpoint found; loading saved results and skipping training.")
                 continue
 
-        start = time.process_time()
+        start = time.perf_counter()
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = pheno[train_idx], pheno[test_idx]
 
@@ -91,6 +121,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             trainer.optimize(
                 n_trials=config.sweep_runs_per_fold,
                 study_name=f"{sweep_config['name']}__fold_{fold_idx+1}",
+                n_jobs=sweep_n_jobs,
             )
             
             logger.info(
@@ -142,7 +173,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             "f1_macro": f1_macro,
             "very_major_error": vme,
             "major_error": me,
-            "fold_time": time.process_time() - start
+            "fold_time": time.perf_counter() - start
         }
         fold_results.append(result_record)
         if checkpoint_dir:
@@ -154,7 +185,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             best_classification_report = classification_report(y_test, y_pred, digits=4)
             # best_model = current_model
 
-        logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f} - Time: {time.process_time() - start:.2f}s")
+        logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f} - Time: {time.perf_counter() - start:.2f}s")
         
         # Free memory at the end of the fold
         del X_train, X_test, y_train, y_test, current_model, y_pred, y_probs
@@ -162,31 +193,49 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             del trainer
         gc.collect()
 
-    # --- Train final model on the full dataset, for testing on alternate datasets ---
-    X_full = fold_features.full(X) if fold_features is not None else X
-    current_model = clone(estimator)
-    if use_sweeps:
-            logger.info(f"Running Optuna sweep for full dataset...")
-            trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X_full, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
-            trainer.optimize(
-                n_trials=config.sweep_runs_per_fold,
-                study_name=f"{sweep_config['name']}__full",
-            )
-            
-            logger.info(
-                f"Best parameters on full data: {trainer.best_params} "
-                f"(val_balanced_accuracy={trainer.best_val_acc:.3f}, trial={trainer.best_trial_number})"
-            )
-            current_model = trainer.best_model # Get the best model from the sweep
-    else:
-        logger.info(f"Training {modelname} on full dataset with fixed parameters.")
-    full_train_model = current_model.fit(X_full, pheno)
-    del X_full
+    if only_fold is not None and only_fold != "full":
+        return None
 
-    # Free up memory after final training    
-    if use_sweeps and 'trainer' in locals():
-        del trainer
-    gc.collect()
+    # --- Train final model on the full dataset, for testing on alternate datasets ---
+    checkpoint = load_full_checkpoint(checkpoint_dir) if checkpoint_dir else None
+    if checkpoint is not None:
+        full_train_model, idf = checkpoint
+        if fold_features is not None:
+            fold_features.idf = idf
+        logger.info("Full-dataset model checkpoint found; loading it and skipping training.")
+    else:
+        X_full = fold_features.full(X) if fold_features is not None else X
+        current_model = clone(estimator)
+        if use_sweeps:
+                logger.info(f"Running Optuna sweep for full dataset...")
+                trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X_full, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
+                trainer.optimize(
+                    n_trials=config.sweep_runs_per_fold,
+                    study_name=f"{sweep_config['name']}__full",
+                    n_jobs=sweep_n_jobs,
+                )
+                
+                logger.info(
+                    f"Best parameters on full data: {trainer.best_params} "
+                    f"(val_balanced_accuracy={trainer.best_val_acc:.3f}, trial={trainer.best_trial_number})"
+                )
+                current_model = trainer.best_model # Get the best model from the sweep
+        else:
+            logger.info(f"Training {modelname} on full dataset with fixed parameters.")
+        full_train_model = current_model.fit(X_full, pheno)
+        del X_full
+        if checkpoint_dir:
+            checkpoint_path = save_full_checkpoint(checkpoint_dir, full_train_model,
+                                                   fold_features.idf if fold_features is not None else None)
+            logger.info(f"Full-dataset model checkpoint saved to {checkpoint_path}.")
+
+        # Free up memory after final training    
+        if use_sweeps and 'trainer' in locals():
+            del trainer
+        gc.collect()
+
+    if only_fold is not None:
+        return None
 
     # --- After all folds, create a summary and log to the main wandb run ---
     logger.info("CV finished. Logging summary results to W&B...")
@@ -195,6 +244,8 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     fold_results = sorted(fold_results, key=lambda row: int(row["fold"]))
     predictions_per_fold = sorted(predictions_per_fold, key=lambda row: int(row["fold"]))
     results_df = pd.DataFrame(fold_results)
+    # Fold checkpoints store their keys sorted; keep the column order of freshly trained folds
+    results_df = results_df[RESULT_COLUMNS + [c for c in results_df.columns if c not in RESULT_COLUMNS]]
     
     # Calculate and log summary statistics
     summary_stats = {
@@ -374,10 +425,34 @@ def main(cfg: DictConfig):
 
     # --- Train Model ---
     model = hydra.utils.instantiate(cfg.model.params)
+    if "device" in model.get_params():
+        device = resolve_device(cfg.device)
+        model.set_params(device=device)
+        fixed_config["device"] = device
+        logger.info(f"Training {cfg.model.name} on device {device}")
 
     # initialize a single wandb run for the whole experiment
     run_name = f"{model_name}__{fname}__split_{split}__feat_{feat}{'__no_sweep' if not cfg.use_sweeps else ''}"
     checkpoint_dir = os.path.join(path_species, "results", "checkpoints", run_name)
+
+    # Train a single fold (or the full-dataset model) as its own job; a later run without only_fold collects the results
+    only_fold = cfg.only_fold
+    if only_fold is not None:
+        if only_fold != "full" and not (isinstance(only_fold, int) and 0 <= only_fold < cfg.num_folds):
+            raise ValueError(f"only_fold must be a fold index in [0, {cfg.num_folds}) or 'full', got {only_fold!r}")
+        logger.info(f"Training only {'the full-dataset model' if only_fold == 'full' else f'fold {only_fold}'} "
+                    f"(checkpoints in {checkpoint_dir})")
+        fitmodel_nestedcv(
+            X, y, cv_splits, model, config=cfg,
+            use_sweeps=cfg.use_sweeps,
+            sweep_config=sweep_config,
+            fixed_run_config=fixed_config,
+            checkpoint_dir=checkpoint_dir,
+            fold_features=fold_features,
+            only_fold=only_fold,
+        )
+        return
+
     with wandb.init(
         project=cfg.wandb.project, name=run_name, 
         config=fixed_config, tags=["summary", "baseline", "cv"]

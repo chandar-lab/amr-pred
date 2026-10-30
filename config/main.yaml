@@ -36,6 +36,14 @@ matrix:
 # argument to build the feature matrix only
 build_only: False
 
+# Device for models that support one (XGBoost): "auto" uses a GPU when one is visible, else the CPU.
+# GPU and CPU runs give slightly different results (different random row subsampling).
+device: "auto"
+
+# Train only one fold (0 to num_folds-1) or the full-dataset model ("full"), and save its checkpoint.
+# Run each part as its own job, then run once more without only_fold to collect the checkpoints and save the results.
+only_fold: null
+
 # Arguments for the genomic distance based splits
 use_genomic_splits: True          # If False, will use random splits
 split_method: "dashing"           # Options: "dashing", "mash", "ani". Only used if use_genomic_splits is True

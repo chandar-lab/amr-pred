@@ -11,6 +11,9 @@ params:
   eval_metric: 'logloss'
   seed: ${seed}
 
+# Sweep trials run at once: XGBoost uses all CPUs (or the GPU) itself
+sweep_n_jobs: 1
+
 # Define hyperparameters for the sweep
 sweep:
   method: bayes # search strategy: bayes, grid, or random
