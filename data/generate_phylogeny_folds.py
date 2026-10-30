@@ -105,16 +105,15 @@ def generate_folds(logger, path_fold_assignments_csv, assemblies, specie_drug_di
         # Take turns assigning assemblies to folds, starting with the first seed
         curr_seed = 0
         while len(assigned_indices) < len(assemblies):
-            # Find the assembly with the maximum distance to the current fold assignments
-            # Calculate the distances from the seed to all assemblies not yet assigned to a fold
-            distances = specie_drug_dist_matrix[seed, :]
+            # Calculate the distances from the current fold's seed to all assemblies not yet assigned to a fold
+            distances = specie_drug_dist_matrix[fold_seeds[curr_seed], :]
             unassigned_indices = [i for i in list(range(len(assemblies))) if i not in assigned_indices]
             # Find the assembly with the minimum distance to the current seed
             min_distance_index = np.argmin(distances[unassigned_indices])
             # Assign this assembly to the current fold
-            fold_assignments[assemblies[unassigned_indices[min_distance_index]]] = len(fold_assignments) % num_folds
+            fold_assignments[assemblies[unassigned_indices[min_distance_index]]] = curr_seed
             assigned_indices.add(unassigned_indices[min_distance_index])
-            fold_sizes[len(fold_assignments) % num_folds] += 1
+            fold_sizes[curr_seed] += 1
             # Move to the next seed
             curr_seed = (curr_seed + 1) % num_folds
 
@@ -249,6 +248,9 @@ def get_genomic_folds(logger, pathogen, antibiotic, path_dataroot, path_csv, pat
         # Load the distance matrix
         dist_matrix = pd.read_csv(full_pathogen_matrix_csv, index_col=0)
         full_pathogen_matrix = dist_matrix.values
+        # Take the assembly names from the saved matrix, as assemblies_txt may have been regenerated since
+        # (different order or contents), which would misalign the names with the matrix rows
+        all_pathogen_assemblies = dist_matrix.index.astype(str).tolist()
 
 
     # Task 3: determine which assemblies are relevant for the antibiotic
