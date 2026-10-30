@@ -510,7 +510,8 @@ def main(cfg: DictConfig):
         preds_rows = []
         for p in predictions:
             for idx, y_t, y_p, y_prob in zip(p["indices"], p["y_true"], p["y_pred"], p["y_prob"]):
-                preds_rows.append({"fold": p["fold"], "sample_index": idx, "y_true": y_t, "y_pred": y_p, "y_prob": y_prob})
+                preds_rows.append({"fold": p["fold"], "sample_index": idx, "assembly": dataset_list[idx]["assembly"],
+                                   "y_true": y_t, "y_pred": y_p, "y_prob": y_prob})
         preds_df = pd.DataFrame(preds_rows)
         preds_path = os.path.join(path_species, "results", f"preds_{run_name}.csv")
         preds_df.to_csv(preds_path, index=False)
