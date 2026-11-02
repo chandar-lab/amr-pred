@@ -85,6 +85,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     predictions_per_fold = []            # <-- store y_true / y_pred per fold
     best_overall_score = -1
     best_classification_report = ""
+    parts_from_checkpoint = 0            # folds (and full model) loaded instead of trained, which total_time doesn't cover
 
     sweep_n_jobs = config.model.get("sweep_n_jobs", 1)
     for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
@@ -96,6 +97,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
                 result_record, prediction_record = checkpoint
                 fold_results.append(result_record)
                 predictions_per_fold.append(prediction_record)
+                parts_from_checkpoint += 1
                 logger.info(f"Fold {fold_idx+1} checkpoint found; loading saved results and skipping training.")
                 continue
 
@@ -200,6 +202,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     checkpoint = load_full_checkpoint(checkpoint_dir) if checkpoint_dir else None
     if checkpoint is not None:
         full_train_model, idf = checkpoint
+        parts_from_checkpoint += 1
         if fold_features is not None:
             fold_features.idf = idf
         logger.info("Full-dataset model checkpoint found; loading it and skipping training.")
@@ -256,6 +259,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         "mean_very_major_error": results_df['very_major_error'].mean(),
         "mean_major_error": results_df['major_error'].mean(),
         "mean_fold_time": results_df['fold_time'].mean(),
+        "parts_from_checkpoint": parts_from_checkpoint,
         "fda_me_passed": bool(results_df['major_error'].mean() < 0.03),
         "fda_vme_passed": bool(results_df['very_major_error'].mean() < 0.015),
     }
@@ -266,6 +270,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
 # config_path is a directory relative to this file (train_model.py)
 @hydra.main(config_path="config", config_name="main", version_base=None)
 def main(cfg: DictConfig):
+    run_start = time.perf_counter()
     random.seed(cfg.seed)
     hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
     output_dir = hydra_cfg.runtime.output_dir
@@ -340,6 +345,12 @@ def main(cfg: DictConfig):
         # save kmers for this size
         save_model_kmers(kmer_features, os.path.join(path_species, "models"), patho_short, antibiotic, k, feature_mode, feat)
         return
+
+    if isinstance(X, np.memmap):
+        # Read the memory-mapped cache into RAM now, so the first fold's time doesn't include reading it from disk
+        load_start = time.perf_counter()
+        X = np.array(X)
+        logger.info(f"Read the feature matrix into memory in {time.perf_counter() - load_start:.1f}s")
     
 
     
@@ -469,6 +480,17 @@ def main(cfg: DictConfig):
         )
         if fold_features is not None and fold_features.idf is not None:
             tfidf_idf = fold_features.idf
+
+        # Wall-clock time of the run up to here: loading the data, CV and the full-dataset model (not saving outputs).
+        # Parts loaded from checkpoints were trained in other runs, so the time is then unknown (NaN).
+        if summary_stats["parts_from_checkpoint"]:
+            total_time = float("nan")
+            logger.warning(f"{summary_stats['parts_from_checkpoint']} part(s) were loaded from checkpoints; total_time is NaN.")
+        else:
+            total_time = time.perf_counter() - run_start
+            logger.info(f"Total time: {total_time:.1f}s")
+        summary_stats["total_time"] = total_time
+        fold_results_df["total_time"] = total_time
 
         logger.info("Logging summary results to W&B...")
         run.log(summary_stats)
