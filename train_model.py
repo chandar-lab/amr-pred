@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import logging
 import random
@@ -34,7 +35,11 @@ logger = logging.getLogger(__name__)
 RESULT_COLUMNS = [
     "model_name", "pathogen", "pathogen_short", "antibiotic", "k", "feat_mode", "max_features", "seed",
     "split_method", "clustering", "fold", "balanced_accuracy", "f1_macro", "very_major_error", "major_error", "fold_time",
+    "swept", "n_sweep_trials", "library_version", "n_train", "n_test", "n_features", "model_params",
 ]
+
+# Result columns that describe how the model was trained; a checkpoint whose values differ was trained differently
+TRAINING_COLUMNS = ["swept", "n_sweep_trials", "model_params"]
 
 # Runs with a feature limit share one cached matrix of the top CACHE_FEATURES k-mers, and take their top max_features from it
 CACHE_FEATURES = 10_000_000
@@ -55,6 +60,42 @@ def save_model_kmers(kmer_features, path_models, patho_short, antibiotic, k, mod
     logger.info(f"Saving the k-mers used in the model to {path_out_kmers} ...")
     with open(path_out_kmers, "wb") as f:
         pickle.dump(payload, f)
+
+
+def model_params_json(model, config, extra_keys=()):
+    """JSON of the model parameters set in the model config (plus extra_keys, e.g. swept ones), with the values the model uses."""
+    keys = {k for k in config.model.params if k != "_target_"} | set(extra_keys)
+    params = model.get_params()
+    if "device" in params:
+        keys.add("device")
+    return json.dumps({k: params[k] for k in sorted(keys) if k in params}, sort_keys=True, default=str)
+
+
+def library_version(model):
+    """Name and version of the library that provides the model, e.g. "xgboost 3.0.2"."""
+    import importlib
+    lib = type(model).__module__.split(".")[0]
+    return f"{lib} {getattr(importlib.import_module(lib), '__version__', 'unknown')}"
+
+
+def check_checkpoint_training(record, expected, where):
+    """Refuse to reuse a checkpoint trained with different settings than this run (old checkpoints lack them)."""
+    stored = {c: record[c] for c in TRAINING_COLUMNS if c in record}
+    if not stored:
+        logger.warning(f"{where} checkpoint predates the training-parameter columns; can't check it matches this run.")
+        return
+
+    def comparable(column, value):
+        # The device doesn't change what is trained (much), and collecting runs may be on another node type
+        if column == "model_params":
+            return {k: v for k, v in json.loads(value).items() if k != "device"}
+        return value
+
+    diff = {c: (stored[c], expected[c]) for c in stored
+            if comparable(c, stored[c]) != comparable(c, expected[c])}
+    if diff:
+        raise ValueError(f"{where} checkpoint was trained with different settings (checkpoint, this run): {diff}. "
+                         f"Delete the checkpoint directory to retrain.")
 
 
 def resolve_device(device):
@@ -88,6 +129,8 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     parts_from_checkpoint = 0            # folds (and full model) loaded instead of trained, which total_time doesn't cover
 
     sweep_n_jobs = config.model.get("sweep_n_jobs", 1)
+    n_sweep_trials = config.sweep_runs_per_fold if use_sweeps else 0
+    lib_version = library_version(estimator)
     for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
         if only_fold is not None and fold_idx != only_fold:
             continue
@@ -95,6 +138,13 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             checkpoint = load_fold_checkpoint(checkpoint_dir, fold_idx)
             if checkpoint is not None:
                 result_record, prediction_record = checkpoint
+                if not use_sweeps:
+                    check_checkpoint_training(result_record, {"swept": False, "n_sweep_trials": 0,
+                                              "model_params": model_params_json(estimator, config)}, f"Fold {fold_idx+1}")
+                elif "swept" in result_record:
+                    # Swept parameters vary by fold, so only the sweep settings can be checked
+                    check_checkpoint_training({c: result_record[c] for c in ("swept", "n_sweep_trials")},
+                                              {"swept": True, "n_sweep_trials": n_sweep_trials}, f"Fold {fold_idx+1}")
                 fold_results.append(result_record)
                 predictions_per_fold.append(prediction_record)
                 parts_from_checkpoint += 1
@@ -131,8 +181,10 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
                 f"(val_balanced_accuracy={trainer.best_val_acc:.3f}, trial={trainer.best_trial_number})"
             )
             current_model = trainer.best_model # Get the best model from the sweep
+            fold_params = model_params_json(current_model, config, extra_keys=trainer.best_params or {})
         else:
             logger.info(f"Training {modelname} in fold {fold_idx+1} with fixed parameters.")
+            fold_params = model_params_json(current_model, config)
 
         # Fit the best model (from sweep) or the standard model on the full training set for the fold
         current_model.fit(X_train, y_train)
@@ -175,7 +227,14 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             "f1_macro": f1_macro,
             "very_major_error": vme,
             "major_error": me,
-            "fold_time": time.perf_counter() - start
+            "fold_time": time.perf_counter() - start,
+            "swept": bool(use_sweeps),
+            "n_sweep_trials": n_sweep_trials,
+            "model_params": fold_params,
+            "library_version": lib_version,
+            "n_train": int(X_train.shape[0]),
+            "n_test": int(X_test.shape[0]),
+            "n_features": int(X_train.shape[1]),
         }
         fold_results.append(result_record)
         if checkpoint_dir:
@@ -202,6 +261,9 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     checkpoint = load_full_checkpoint(checkpoint_dir) if checkpoint_dir else None
     if checkpoint is not None:
         full_train_model, idf = checkpoint
+        if not use_sweeps:
+            check_checkpoint_training({"model_params": model_params_json(full_train_model, config)},
+                                      {"model_params": model_params_json(estimator, config)}, "Full-dataset model")
         parts_from_checkpoint += 1
         if fold_features is not None:
             fold_features.idf = idf
@@ -248,7 +310,8 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     predictions_per_fold = sorted(predictions_per_fold, key=lambda row: int(row["fold"]))
     results_df = pd.DataFrame(fold_results)
     # Fold checkpoints store their keys sorted; keep the column order of freshly trained folds
-    results_df = results_df[RESULT_COLUMNS + [c for c in results_df.columns if c not in RESULT_COLUMNS]]
+    # (reindex: checkpoints saved before a column existed lack it, and get NaN)
+    results_df = results_df.reindex(columns=RESULT_COLUMNS + [c for c in results_df.columns if c not in RESULT_COLUMNS])
     
     # Calculate and log summary statistics
     summary_stats = {
@@ -380,6 +443,7 @@ def main(cfg: DictConfig):
         "feat_mode": cfg.matrix.feat_mode, "max_features": feat,
         "use_sparse": cfg.dataset.use_sparse, "seed": cfg.seed, 
         "split_method": split, "clustering": cfg.clustering_method,
+        "use_sweeps": cfg.use_sweeps,
     }
     
     # Create the sweep configuration if sweeps are enabled, to pass to the fold trainer
@@ -526,6 +590,8 @@ def main(cfg: DictConfig):
         save_fname = f"results_{run_name}"
         path_out = os.path.join(path_species, "results", save_fname)
         # results_df = pd.DataFrame(results)
+        # model_params last, as it is long
+        fold_results_df = fold_results_df[[c for c in fold_results_df.columns if c != "model_params"] + ["model_params"]]
         fold_results_df.to_csv(f"{path_out}.csv", index=False)
         
         # Also save per-fold predictions (y_true, y_pred) so downstream metrics can be computed easily
