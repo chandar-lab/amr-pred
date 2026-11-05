@@ -98,6 +98,22 @@ def check_checkpoint_training(record, expected, where):
                          f"Delete the checkpoint directory to retrain.")
 
 
+def load_fold_params(path):
+    """Per-part parameter overrides from fold_params_file, keyed by part ("0".."n-1", "full"); {} without a file."""
+    if not path:
+        return {}
+    with open(path) as f:
+        return {str(part): params for part, params in json.load(f).items() if not str(part).startswith("_")}
+
+
+def model_for_part(estimator, fold_params, part):
+    """A fresh copy of estimator with the fold_params overrides of this part (a fold index or "full"), and their keys."""
+    overrides = fold_params.get(str(part), {})
+    if fold_params and not overrides:
+        raise ValueError(f"fold_params_file has no parameters for part {part!r}")
+    return clone(estimator).set_params(**overrides), tuple(overrides)
+
+
 def resolve_device(device):
     """Device for models that support one (XGBoost): "auto" is "cuda" when a GPU is visible, else "cpu"."""
     if device != "auto":
@@ -131,6 +147,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     sweep_n_jobs = config.model.get("sweep_n_jobs", 1)
     n_sweep_trials = config.sweep_runs_per_fold if use_sweeps else 0
     lib_version = library_version(estimator)
+    fold_params = load_fold_params(config.get("fold_params_file")) if not use_sweeps else {}
     for fold_idx, (train_idx, test_idx) in enumerate(cv_splits):
         if only_fold is not None and fold_idx != only_fold:
             continue
@@ -139,8 +156,10 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             if checkpoint is not None:
                 result_record, prediction_record = checkpoint
                 if not use_sweeps:
+                    expected_model, extra = model_for_part(estimator, fold_params, fold_idx)
                     check_checkpoint_training(result_record, {"swept": False, "n_sweep_trials": 0,
-                                              "model_params": model_params_json(estimator, config)}, f"Fold {fold_idx+1}")
+                                              "model_params": model_params_json(expected_model, config, extra)},
+                                              f"Fold {fold_idx+1}")
                 elif "swept" in result_record:
                     # Swept parameters vary by fold, so only the sweep settings can be checked
                     check_checkpoint_training({c: result_record[c] for c in ("swept", "n_sweep_trials")},
@@ -165,7 +184,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             X_train, X_test = train_val_svd(X_train, X_test, k=163)
 
         
-        current_model = clone(estimator)
+        current_model, extra = model_for_part(estimator, fold_params, fold_idx)
 
         if use_sweeps:
             logger.info(f"Running Optuna sweep for fold {fold_idx+1}...")
@@ -181,10 +200,11 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
                 f"(val_balanced_accuracy={trainer.best_val_acc:.3f}, trial={trainer.best_trial_number})"
             )
             current_model = trainer.best_model # Get the best model from the sweep
-            fold_params = model_params_json(current_model, config, extra_keys=trainer.best_params or {})
+            part_params = model_params_json(current_model, config, extra_keys=trainer.best_params or {})
         else:
-            logger.info(f"Training {modelname} in fold {fold_idx+1} with fixed parameters.")
-            fold_params = model_params_json(current_model, config)
+            logger.info(f"Training {modelname} in fold {fold_idx+1} with fixed parameters"
+                        f"{f' (fold_params_file: {dict(fold_params[str(fold_idx)])})' if fold_params else ''}.")
+            part_params = model_params_json(current_model, config, extra)
 
         # Fit the best model (from sweep) or the standard model on the full training set for the fold
         current_model.fit(X_train, y_train)
@@ -230,7 +250,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
             "fold_time": time.perf_counter() - start,
             "swept": bool(use_sweeps),
             "n_sweep_trials": n_sweep_trials,
-            "model_params": fold_params,
+            "model_params": part_params,
             "library_version": lib_version,
             "n_train": int(X_train.shape[0]),
             "n_test": int(X_test.shape[0]),
@@ -258,19 +278,26 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         return None
 
     # --- Train final model on the full dataset, for testing on alternate datasets ---
-    checkpoint = load_full_checkpoint(checkpoint_dir) if checkpoint_dir else None
-    if checkpoint is not None:
+    # With SVD, the full-dataset model is skipped: the fitted SVD isn't saved, so it couldn't be applied to new data
+    reduce_dim = config.matrix.reduce_dimensionality
+    checkpoint = load_full_checkpoint(checkpoint_dir) if checkpoint_dir and not reduce_dim else None
+    if reduce_dim:
+        full_train_model = None
+        logger.info("SVD is on: skipping the full-dataset model.")
+    elif checkpoint is not None:
         full_train_model, idf = checkpoint
         if not use_sweeps:
-            check_checkpoint_training({"model_params": model_params_json(full_train_model, config)},
-                                      {"model_params": model_params_json(estimator, config)}, "Full-dataset model")
+            expected_model, extra = model_for_part(estimator, fold_params, "full")
+            check_checkpoint_training({"model_params": model_params_json(full_train_model, config, extra)},
+                                      {"model_params": model_params_json(expected_model, config, extra)},
+                                      "Full-dataset model")
         parts_from_checkpoint += 1
         if fold_features is not None:
             fold_features.idf = idf
         logger.info("Full-dataset model checkpoint found; loading it and skipping training.")
     else:
         X_full = fold_features.full(X) if fold_features is not None else X
-        current_model = clone(estimator)
+        current_model, _ = model_for_part(estimator, fold_params, "full")
         if use_sweeps:
                 logger.info(f"Running Optuna sweep for full dataset...")
                 trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X_full, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
@@ -444,6 +471,7 @@ def main(cfg: DictConfig):
         "use_sparse": cfg.dataset.use_sparse, "seed": cfg.seed, 
         "split_method": split, "clustering": cfg.clustering_method,
         "use_sweeps": cfg.use_sweeps,
+        "fold_params_file": cfg.get("fold_params_file"),
     }
     
     # Create the sweep configuration if sweeps are enabled, to pass to the fold trainer
@@ -508,6 +536,10 @@ def main(cfg: DictConfig):
 
     # initialize a single wandb run for the whole experiment
     run_name = f"{model_name}__{fname}__split_{split}__feat_{feat}{'__no_sweep' if not cfg.use_sweeps else ''}"
+    if cfg.get("fold_params_file"):
+        if cfg.use_sweeps:
+            raise ValueError("fold_params_file only applies to runs without sweeps (use_sweeps=False)")
+        run_name += "__fold_params"
     checkpoint_dir = os.path.join(path_species, "results", "checkpoints", run_name)
 
     # Train a single fold (or the full-dataset model) as its own job; a later run without only_fold collects the results
@@ -565,10 +597,11 @@ def main(cfg: DictConfig):
         os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
         
         # save the best model
-        save_fname_model = f"model_{run_name}.pkl"
-        path_out_model = os.path.join(path_species, "models", save_fname_model)
-        logger.info(f"Saving the best model to {path_out_model} ...")
-        joblib.dump(full_train_model, path_out_model)
+        if full_train_model is not None:  # None with SVD, which skips the full-dataset model
+            save_fname_model = f"model_{run_name}.pkl"
+            path_out_model = os.path.join(path_species, "models", save_fname_model)
+            logger.info(f"Saving the best model to {path_out_model} ...")
+            joblib.dump(full_train_model, path_out_model)
 
         # save the TF-IDF parameters next to the model, for inference
         if tfidf_idf is not None:

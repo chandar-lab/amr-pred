@@ -38,10 +38,14 @@ def get_parser():
                         "E.g., <path_fna>/escherichia_coli/, <path_fna>/staphylococcus_aureus/, etc.")
     parser.add_argument("--path-csv", type=str, required=True,
                         help="Path to the csv file containing specie x drug assembly id and mic values. "
+                        "May contain several species/drugs: only the rows for the model's species and drug are used. "
                         "The labels are recomputed from the MIC values with the CLSI breakpoints, using the same filtering as "
                         "data/reinterpret_data_with_mic.py.")
     parser.add_argument("--path-clsi-bps", type=str, default="./datasets/breakpoints_per_species_20250527.csv",
                         help="Path to the CLSI breakpoints file used to reinterpret the test labels from the MIC values.")
+    parser.add_argument("--path-isolates", type=str, default=None,
+                        help="Path to the NCBI isolates file (https://www.ncbi.nlm.nih.gov/pathogens/isolates). If given, the "
+                        "'Assembly' column is added by merging on 'Isolate', as for training; needed when the CSV has no 'Assembly' column.")
     parser.add_argument("--path-model", type=str, required=True,
                         help="Path to the trained model (must be a pkl file).")
     parser.add_argument("--path-out", type=str, default=".",
@@ -96,7 +100,7 @@ def get_reinterpreted_csv_path(path_out, pathogen, antibiotic):
     return os.path.join(path_out, f"test_{pathogen}__{antibiotic}_SR_filt.csv")
 
 
-def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_clsi_bps):
+def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_clsi_bps, path_isolates=None):
     ''' Given a path to a trained model, load the model and the test data, by extracting k-mer features.
     The test labels are reinterpreted from the MIC values with the CLSI breakpoints, and the reinterpreted
     CSV is saved to get_reinterpreted_csv_path(path_out, pathogen, antibiotic).'''
@@ -132,7 +136,7 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_cls
     path_root_fna = os.path.join(path_root_fna, PATHOGEN_NAME_MAPPER[pathogen])
     logging.info("Loading test data from %s", path_data_csv)
     df_test = reinterpret_test_data(pd.read_csv(path_data_csv, low_memory=False),
-                                    PATHOGEN_NAME_MAPPER[pathogen], antibiotic, path_clsi_bps)
+                                    PATHOGEN_NAME_MAPPER[pathogen], antibiotic, path_clsi_bps, path_isolates)
     path_test_csv = get_reinterpreted_csv_path(path_out, pathogen, antibiotic)
     df_test.to_csv(path_test_csv, index=False)
     logging.info("Saved the reinterpreted test data to %s", path_test_csv)
@@ -173,17 +177,11 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_cls
     # Feature extraction
     # ---------------------
     logging.info("Initializing K-mer class to build feature matrix ...")
-    if grouped:
-        # Columns of the 10M test matrix are single k-mers, so grouped models use their own cache
-        full_matrix_path = os.path.join(
-            path_out, "feature_matrices", f"{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_{fmat_size}__grouped.npz")
-    else:
-        # Check if the full 10M feature matrix exists from training
-        full_matrix_path = os.path.join(
-            path_out, "feature_matrices", f"{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_10M.npz")
-        if not os.path.isfile(full_matrix_path):
-            full_matrix_path = os.path.join(
-                path_out, "feature_matrices", f"{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_{fmat_size}.npz")
+    # Matrices built here are saved under a "test__" name, so that they never overwrite a training cache
+    # (e.g. when path_out is datasets/<species>). The training full matrix is only read when it was built
+    # from exactly these genomes (e.g. explaining a model on its training data).
+    stem = f"{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_{fmat_size}"
+    test_matrix_path = os.path.join(path_out, "feature_matrices", f"test__{stem}{'__grouped' if grouped else ''}.npz")
     kmer_features = KmerFeatures(
         k=k,
         mode=kmer_mode,
@@ -192,10 +190,17 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_cls
         batch_size=256,
         use_canonical=True,
         use_sparse=False,
-        path_full_matrix=full_matrix_path,
+        path_full_matrix=test_matrix_path,
         path_kmers=None if grouped else path_kmers,
         path_kmer_groups=path_kmers if grouped else None,
     )
+    if not grouped:
+        # Columns of the grouped training cache are groups of the training folds, so grouped models use their own cache
+        train_matrix_path = os.path.join(
+            path_out, "feature_matrices", f"{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_10M.npz")
+        if os.path.isfile(train_matrix_path) and kmer_features.usable_cache_for(test_datalist, train_matrix_path):
+            logging.info(f"Reading the training matrix {train_matrix_path}, built from the same genomes")
+            kmer_features.path_full_matrix = train_matrix_path
 
     logging.info("Extracting k-mer features")
     X_test, y_test = kmer_features.build_feature_matrix(dataset=test_datalist)

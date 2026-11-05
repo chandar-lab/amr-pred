@@ -13,11 +13,11 @@ The script does the following:
 import hydra
 import pandas as pd
 import os
-from tqdm import tqdm
 # import argparse
 from loguru import logger
 import glob
 from omegaconf import DictConfig
+from data_utils import download_assemblies
 
 
 # def parse_args():
@@ -74,23 +74,7 @@ def main(cfg: DictConfig):
     assemblies = mega_df['Assembly'].unique()
     logger.info(f"Number of unique assemblies: {len(assemblies)}")
 
-    # run a terminal command to download the assemblies
-    # for more info: https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/genomes/large-download/
-    for assembly in tqdm(assemblies, desc="Downloading genomes from NCBI"):
-        # Skip assemblies whose genome file is already present. Checking for the directory alone is not
-        # enough: scratch cleaning can delete the .fna files and leave the empty directories behind.
-        assembly_dir = os.path.join(path_output, assembly)
-        if glob.glob(os.path.join(assembly_dir, "ncbi_dataset", "data", assembly, "*.fna")):
-            logger.info(f"Genome for {assembly} already exists in {assembly_dir}. Skipping download.")
-            continue
-        # 1. run the command to download the assembly
-        os.system(f"datasets download genome accession {assembly} --dehydrated --include genome,seq-report --filename {assembly}.zip")
-        # 2. unzip the file
-        os.system(f"unzip -o {assembly}.zip -d {path_output}/{assembly}")
-        # 3. rehydrate the file
-        os.system(f"datasets rehydrate --directory {path_output}/{assembly}")
-        # 4. remove the zip file
-        os.system(f"rm {assembly}.zip")
+    download_assemblies(list(assemblies), path_output, logger)
 
 
 if __name__ == "__main__":

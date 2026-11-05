@@ -659,6 +659,12 @@ class KmerFeatures:
         #     X, y = self.load_matrix(self.path_precomputed)
         #     return X, y
 
+    def usable_cache_for(self, dataset, filepath):
+        """Whether the cached matrix at filepath was built from the dataset's genomes (in order) and has enough
+        columns, i.e. whether build_feature_matrix would read it rather than rebuild and overwrite it."""
+        self.assemblies = self._assembly_ids(dataset)
+        return self._usable_cache(filepath)
+
     def _take_top_columns(self, X):
         """Keep the columns of the top max_features k-mers (columns are ordered by k-mer frequency)."""
         n_features_full = X.shape[1]

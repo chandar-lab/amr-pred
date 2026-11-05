@@ -257,6 +257,34 @@ def clean_ecoli_data(df):
     return df
 
 
+def add_assemblies(df, path_isolates, organism):
+    """
+    Add the 'Assembly' column by merging with the NCBI isolates file (https://www.ncbi.nlm.nih.gov/pathogens/isolates)
+    on the 'Isolate' column. Isolates with no assembly are dropped (inner merge).
+    """
+    phenotypic_unique_isolates = df['Isolate'].unique()
+    df_isolates = pd.read_csv(path_isolates, sep="\t", low_memory=False, usecols=['#Organism group', 'Isolate', 'Assembly'])
+
+    # keep the data for the organism
+    df_isolates['#Organism group'] = df_isolates['#Organism group'].str.replace(' ', '_', regex=False)
+    df_isolates['#Organism group'] = df_isolates['#Organism group'].str.lower()
+    if organism == "escherichia_coli":
+        df_isolates = df_isolates[df_isolates['#Organism group'] == 'e.coli_and_shigella']
+        df_isolates['#Organism group'] = 'escherichia_coli'
+    else:
+        df_isolates = df_isolates[df_isolates['#Organism group'] == organism]
+
+    # drop the rows where 'Assembly' is NaN
+    df_isolates = df_isolates.dropna(subset=['Assembly'])
+
+    # keep only the isolates that are in the ASTs file, and only the isolates and assembly columns
+    df_isolates_common = df_isolates[df_isolates['Isolate'].isin(phenotypic_unique_isolates)]
+    df_isolates_common = df_isolates_common[['Isolate', 'Assembly']]
+
+    # merge the isolates dataframe with the main dataframe on 'Isolate' column
+    return df.merge(df_isolates_common, on='Isolate', how='inner')
+
+
 def normalize_ast_names(df):
     """
     Lowercase the 'Antibiotic' and 'Organism group' columns and replace spaces (and '-' in drug names)
@@ -356,14 +384,16 @@ def reinterpret_drug_with_mic(df_new, bp_s, bp_r, drug, logger=logging):
     return df_new
 
 
-def reinterpret_test_data(df, organism, drug, path_clsi_bps, logger=logging):
+def reinterpret_test_data(df, organism, drug, path_clsi_bps, path_isolates=None, logger=logging):
     """
     Apply the same filtering and MIC reinterpretation as data/reinterpret_data_with_mic.py to a test dataframe
     for one species x drug. The dataframe needs the NCBI AST columns ('Organism group', 'Antibiotic',
-    'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype') plus 'Assembly'
-    ('Scientific name' too for E. coli). Any existing 'MIC_revised'/'Phenotype_revised' columns are recomputed.
+    'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype') plus 'Assembly' ('Scientific name' too for E. coli).
+    If path_isolates is given, 'Assembly' is (re)computed by merging with the NCBI isolates file on 'Isolate', as for training.
+    Any existing 'MIC_revised'/'Phenotype_revised' columns are recomputed.
     """
-    required = ['Organism group', 'Antibiotic', 'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype', 'Assembly']
+    required = ['Organism group', 'Antibiotic', 'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype']
+    required.append('Isolate' if path_isolates else 'Assembly')
     if organism == "escherichia_coli":
         required.append('Scientific name')
     missing = [c for c in required if c not in df.columns]
@@ -379,6 +409,12 @@ def reinterpret_test_data(df, organism, drug, path_clsi_bps, logger=logging):
         df = clean_ecoli_data(df)
         logger.info(f"Removed {n_before - len(df)} Shigella samples")
         df['Organism group'] = 'escherichia_coli'
+
+    if path_isolates:
+        n_before, n_iso_before = len(df), df['Isolate'].nunique()
+        df = add_assemblies(df.drop(columns=['Assembly'], errors='ignore'), path_isolates, organism)
+        logger.info(f"Added assemblies from {path_isolates}: {df['Isolate'].nunique()}/{n_iso_before} isolates have one "
+                    f"({n_before - len(df)} rows without an assembly removed)")
 
     df = normalize_ast_names(df)
     df.loc[df['Organism group'] == 'acinetobacter_calcoaceticus/baumannii_complex', 'Organism group'] = 'acinetobacter_baumannii'
@@ -421,3 +457,48 @@ def reinterpret_test_data(df, organism, drug, path_clsi_bps, logger=logging):
     logger.info(f"Samples whose lab S/R label differs from the reinterpreted label: {n_flipped}")
 
     return df
+
+
+# ================================
+# Genome download from NCBI
+# Shared by data/download_dataset.py (training genomes) and testing/download_test_genomes.py (test genomes)
+# ================================
+
+def genome_fna_files(path_species, assembly):
+    """The .fna files of an assembly in the genome cache (the layout load_data reads)."""
+    return glob.glob(os.path.join(path_species, assembly, "ncbi_dataset", "data", assembly, "*.fna"))
+
+
+def download_assemblies(assemblies, path_species, logger=logging):
+    """
+    Download the genomes of the given assemblies from NCBI with the datasets command line tool into
+    <path_species>/<assembly>/ncbi_dataset/data/<assembly>/*.fna. Assemblies whose .fna is already there are skipped.
+    For more info: https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/genomes/large-download/
+    Returns the list of assemblies that could not be downloaded.
+    """
+    os.makedirs(path_species, exist_ok=True)
+    # Checking for the directory alone is not enough: scratch cleaning can delete the .fna files and leave
+    # the empty directories behind.
+    to_download = [a for a in assemblies if not genome_fna_files(path_species, a)]
+    logger.info(f"{len(assemblies) - len(to_download)}/{len(assemblies)} genomes already in {path_species}; "
+                f"downloading {len(to_download)}")
+
+    failed = []
+    for i, assembly in enumerate(to_download, 1):
+        path_zip = os.path.join(path_species, f"{assembly}.zip")
+        path_assembly = os.path.join(path_species, assembly)
+        # 1. download the (dehydrated) assembly, 2. unzip it, 3. rehydrate it (fetches the sequences), 4. remove the zip
+        os.system(f"datasets download genome accession {assembly} --dehydrated --include genome,seq-report --filename {path_zip}")
+        os.system(f"unzip -o -q {path_zip} -d {path_assembly}")
+        os.system(f"datasets rehydrate --directory {path_assembly}")
+        if os.path.exists(path_zip):
+            os.remove(path_zip)
+        if genome_fna_files(path_species, assembly):
+            logger.info(f"[{i}/{len(to_download)}] Downloaded {assembly}")
+        else:
+            logger.warning(f"[{i}/{len(to_download)}] No .fna file for {assembly} after the download")
+            failed.append(assembly)
+
+    if failed:
+        logger.warning(f"{len(failed)} genomes could not be downloaded: {failed}")
+    return failed

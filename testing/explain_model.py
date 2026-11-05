@@ -59,7 +59,7 @@ def main():
 
     # Load model and data
     model, X_test, y_test, model_info, kmer_features = load_model_data(
-        path_root_fna, path_data_csv, path_model, path_out, args.path_clsi_bps
+        path_root_fna, path_data_csv, path_model, path_out, args.path_clsi_bps, args.path_isolates
     )
     pathogen = model_info['pathogen']
     antibiotic = model_info['antibiotic']

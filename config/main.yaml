@@ -44,6 +44,11 @@ device: "auto"
 # Run each part as its own job, then run once more without only_fold to collect the checkpoints and save the results.
 only_fold: null
 
+# JSON file of fixed model parameters per part, for runs without sweeps: {"0": {"C": 100}, ..., "full": {...}}
+# (keys starting with "_" are ignored). Each fold (and the full-dataset model) is trained with its entry on top of
+# model.params. The run name gets "__fold_params", so these runs don't overwrite plain no-sweep runs.
+fold_params_file: null
+
 # Arguments for the genomic distance based splits
 use_genomic_splits: True          # If False, will use random splits
 split_method: "dashing"           # Options: "dashing", "mash", "ani". Only used if use_genomic_splits is True

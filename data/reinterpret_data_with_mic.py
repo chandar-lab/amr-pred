@@ -19,7 +19,7 @@ from tqdm import tqdm
 import argparse
 from data_utils import (plot_antibiotic_counts, plot_antibiotic_counts_per_organism, 
     get_drugs_for_organism_clsi, get_mic_breakpoints, clean_breakpoints_file,
-    clean_ecoli_data, normalize_ast_names, add_revised_mic, reinterpret_drug_with_mic)
+    clean_ecoli_data, normalize_ast_names, add_revised_mic, reinterpret_drug_with_mic, add_assemblies)
 
 
 
@@ -119,38 +119,12 @@ def main(cfg: DictConfig):
         # rename organism group to 'escherichia_coli'
         df['Organism group'] = 'escherichia_coli'
 
-    phenotypic_unique_isolates = df['Isolate'].unique()
-    # logger.info(f"Number of isolates in phenotypic data: {len(df['Isolate'].unique())}")
-
     # ================================
     # Store the assembly identifier in the dataframe 
     # ================================
     
-    # add the assembly column to the dataframe
-    df_isolates = pd.read_csv(args.path_isolates, sep="\t", low_memory=False)
-
-    # keep the data for the organism
-    df_isolates['#Organism group'] = df_isolates['#Organism group'].str.replace(' ', '_', regex=False)
-    df_isolates['#Organism group'] = df_isolates['#Organism group'].str.lower()
-    if organism == "escherichia_coli":
-        df_isolates = df_isolates[df_isolates['#Organism group'] == 'e.coli_and_shigella']
-        df_isolates['#Organism group'] = 'escherichia_coli'
-    else:
-        df_isolates = df_isolates[df_isolates['#Organism group'] == organism]
-
-    # drop the rows where 'Assembly' is NaN
-    df_isolates = df_isolates.dropna(subset=['Assembly'])
-    # logger.info(f"Number of isolates after dropping empty assemblies: {len(df_isolates['Isolate'].unique())}")
-
-    # keep only the isolates that are in the ASTs file
-    df_isolates_common = df_isolates[df_isolates['Isolate'].isin(phenotypic_unique_isolates)]
-    # keep only the isolates and assembly columns
-    df_isolates_common = df_isolates_common[['Isolate', 'Assembly']]
-    # logger.info(f"Number of common isolates: {len(df_isolates_common)}")
-
-    # merge the isolates dataframe with the main dataframe on 'Isolate' column
-    df = df.merge(df_isolates_common, on='Isolate', how='inner')
-    # logger.info(f"Number of samples after merging with isolates: {len(df)}")
+    # add the assembly column to the dataframe (isolates without an assembly are dropped)
+    df = add_assemblies(df, args.path_isolates, organism)
 
     # lowercase drug and organism names, with underscores for spaces (and '-' in drug names)
     df = normalize_ast_names(df)
