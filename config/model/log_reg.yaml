@@ -27,12 +27,12 @@ sweep:
       # The range for the inverse of regularization strength
       distribution: log_uniform_values
       min: 0.001
-      max: 100.0
+      max: 10000.0
     penalty:
       # We are only using the l1 penalty for Lasso
-      values: ['l1', 'elasticnet']
+      value: 'l1'
     solver:
-      # These are the solvers compatible with the l1 penalty
-      value: 'saga'
+      #  Much faster than previous 'saga'
+      value: 'liblinear'
     max_iter:
       values: [300, 400, 500] # Added more options for convergence
