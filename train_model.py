@@ -68,6 +68,8 @@ def model_params_json(model, config, extra_keys=()):
     params = model.get_params()
     if "device" in params:
         keys.add("device")
+    if config.model.get("balance_classes"):
+        keys.add("scale_pos_weight")
     return json.dumps({k: params[k] for k in sorted(keys) if k in params}, sort_keys=True, default=str)
 
 
@@ -114,6 +116,22 @@ def model_for_part(estimator, fold_params, part):
     return clone(estimator).set_params(**overrides), tuple(overrides)
 
 
+def balance_classes(model, config, y_train):
+    """With model.balance_classes, set XGBoost's scale_pos_weight to n_negative / n_positive of y_train (0/1 labels).
+
+    This is XGBoost's counterpart of class_weight="balanced". It is set from the training labels of each fold
+    (or of the full dataset), and sweeps keep it: their stratified inner split has the same class ratio.
+    """
+    if config.model.get("balance_classes"):
+        if "scale_pos_weight" not in model.get_params():
+            raise ValueError(f"balance_classes needs a model with scale_pos_weight, got {type(model).__name__}")
+        n_pos = int(np.sum(y_train == 1))
+        if n_pos == 0 or n_pos == len(y_train):
+            raise ValueError(f"balance_classes needs both classes in the training labels, got {n_pos} of {len(y_train)} positive")
+        model.set_params(scale_pos_weight=(len(y_train) - n_pos) / n_pos)
+    return model
+
+
 def resolve_device(device):
     """Device for models that support one (XGBoost): "auto" is "cuda" when a GPU is visible, else "cpu"."""
     if device != "auto":
@@ -157,6 +175,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
                 result_record, prediction_record = checkpoint
                 if not use_sweeps:
                     expected_model, extra = model_for_part(estimator, fold_params, fold_idx)
+                    balance_classes(expected_model, config, pheno[train_idx])
                     check_checkpoint_training(result_record, {"swept": False, "n_sweep_trials": 0,
                                               "model_params": model_params_json(expected_model, config, extra)},
                                               f"Fold {fold_idx+1}")
@@ -185,6 +204,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
 
         
         current_model, extra = model_for_part(estimator, fold_params, fold_idx)
+        balance_classes(current_model, config, y_train)
 
         if use_sweeps:
             logger.info(f"Running Optuna sweep for fold {fold_idx+1}...")
@@ -288,6 +308,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         full_train_model, idf = checkpoint
         if not use_sweeps:
             expected_model, extra = model_for_part(estimator, fold_params, "full")
+            balance_classes(expected_model, config, pheno)
             check_checkpoint_training({"model_params": model_params_json(full_train_model, config, extra)},
                                       {"model_params": model_params_json(expected_model, config, extra)},
                                       "Full-dataset model")
@@ -298,6 +319,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     else:
         X_full = fold_features.full(X) if fold_features is not None else X
         current_model, _ = model_for_part(estimator, fold_params, "full")
+        balance_classes(current_model, config, pheno)
         if use_sweeps:
                 logger.info(f"Running Optuna sweep for full dataset...")
                 trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X_full, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset

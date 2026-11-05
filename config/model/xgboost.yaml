@@ -11,6 +11,10 @@ params:
   eval_metric: 'logloss'
   seed: ${seed}
 
+# Weight the resistant class by n_susceptible / n_resistant of each part's training genomes (scale_pos_weight),
+# XGBoost's counterpart of class_weight="balanced": it matches the balanced-accuracy metric (e_coli imipenem is 1% resistant)
+balance_classes: true
+
 # Sweep trials run at once: XGBoost uses all CPUs (or the GPU) itself
 sweep_n_jobs: 1
 
@@ -47,5 +51,3 @@ sweep:
     #   distribution: uniform
     #   min: 0.5
     #   max: 1.0
-
-    # Consider scale_pos_weight

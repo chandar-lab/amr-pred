@@ -4,16 +4,17 @@ name: "LGR"
 
 params:
   _target_: sklearn.linear_model.LogisticRegression
-  # Default settings for the model before the sweep
+  # l1 (lasso) with liblinear: sparse k-mer selection, and it suits few genomes x many columns.
+  # Elasticnet (which needs saga) never beat l1 in the earlier sweeps, and saga mostly hit max_iter at large C.
   penalty: l1
+  solver: liblinear
   C: 1.0
-  solver: liblinear # Changed from saga to a faster
-  max_iter: 1000
+  # Weight classes inversely to their frequency, matching the balanced-accuracy metric (e_coli imipenem is 1% resistant)
+  class_weight: balanced
+  max_iter: 2000
   random_state: ${seed}
-  l1_ratio: 0.5 # Only used if penalty is 'elasticnet'
-  n_jobs: -1
 
-# Sweep trials run at once: liblinear and saga use one CPU, so run trials in parallel (-1: all CPUs of the job)
+# Sweep trials run at once: liblinear uses one CPU, so run trials in parallel (-1: all CPUs of the job)
 sweep_n_jobs: -1
 
 # Define hyperparameters for the sweep
@@ -24,12 +25,12 @@ sweep:
     goal: maximize
   parameters:
     C:
-      # The range for the inverse of regularization strength
+      # Inverse of the regularization strength. On TF-IDF features, the earlier (unweighted) sweeps scored exactly 0.5
+      # for every C <= 1 and kept choosing C near the top of the range, up to 1e4.
       distribution: log_uniform_values
-      min: 0.001
-      max: 10000.0
+      min: 1.0
+      max: 100000.0
     intercept_scaling:
-      # The range for the intercept scaling factor
       distribution: uniform
       min: 0.1
       max: 10.0
