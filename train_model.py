@@ -132,6 +132,38 @@ def balance_classes(model, config, y_train):
     return model
 
 
+LIBLINEAR_MAX_NONZERO = 2**31 - 1
+
+
+def solver_for_matrix(model, config, X):
+    """With model.large_matrix_params, use those parameters (e.g. saga) when liblinear can't train on X.
+
+    liblinear counts the nonzero values in a 32-bit int, and adds up to 2 per row (the intercept and an end marker),
+    so it overflows above 2^31 - 1 of them. The choice is made once per part (fold training rows or the full dataset),
+    and its sweep trials use the same solver.
+    """
+    params = config.model.get("large_matrix_params")
+    if params and model.get_params().get("solver") == "liblinear":
+        n_nonzero = int(np.count_nonzero(X)) + 2 * X.shape[0]
+        if n_nonzero > LIBLINEAR_MAX_NONZERO:
+            params = OmegaConf.to_container(params, resolve=True)
+            logger.info(f"{n_nonzero:,} nonzero values are more than liblinear can index ({LIBLINEAR_MAX_NONZERO:,}); "
+                        f"using {params} instead.")
+            model.set_params(**params)
+    return model
+
+
+def expected_solver(model, config, stored_params):
+    """For checkpoint checks: the expected model, with model.large_matrix_params if the checkpoint was trained with them."""
+    params = config.model.get("large_matrix_params")
+    if params and stored_params:
+        params = OmegaConf.to_container(params, resolve=True)
+        stored = json.loads(stored_params)
+        if all(stored.get(k) == v for k, v in params.items()):
+            model.set_params(**params)
+    return model
+
+
 def resolve_device(device):
     """Device for models that support one (XGBoost): "auto" is "cuda" when a GPU is visible, else "cpu"."""
     if device != "auto":
@@ -176,6 +208,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
                 if not use_sweeps:
                     expected_model, extra = model_for_part(estimator, fold_params, fold_idx)
                     balance_classes(expected_model, config, pheno[train_idx])
+                    expected_solver(expected_model, config, result_record.get("model_params"))
                     check_checkpoint_training(result_record, {"swept": False, "n_sweep_trials": 0,
                                               "model_params": model_params_json(expected_model, config, extra)},
                                               f"Fold {fold_idx+1}")
@@ -205,6 +238,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         
         current_model, extra = model_for_part(estimator, fold_params, fold_idx)
         balance_classes(current_model, config, y_train)
+        solver_for_matrix(current_model, config, X_train)
 
         if use_sweeps:
             logger.info(f"Running Optuna sweep for fold {fold_idx+1}...")
@@ -309,6 +343,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         if not use_sweeps:
             expected_model, extra = model_for_part(estimator, fold_params, "full")
             balance_classes(expected_model, config, pheno)
+            expected_solver(expected_model, config, model_params_json(full_train_model, config, extra))
             check_checkpoint_training({"model_params": model_params_json(full_train_model, config, extra)},
                                       {"model_params": model_params_json(expected_model, config, extra)},
                                       "Full-dataset model")
@@ -320,6 +355,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         X_full = fold_features.full(X) if fold_features is not None else X
         current_model, _ = model_for_part(estimator, fold_params, "full")
         balance_classes(current_model, config, pheno)
+        solver_for_matrix(current_model, config, X_full)
         if use_sweeps:
                 logger.info(f"Running Optuna sweep for full dataset...")
                 trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X_full, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
