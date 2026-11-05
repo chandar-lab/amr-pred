@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 from sklearn.metrics import balanced_accuracy_score, classification_report
 
-from data.data_utils import load_data
+from data.data_utils import load_data, reinterpret_test_data
 from features.kmer import KmerFeatures
 from features.utils import apply_tfidf
 
@@ -37,7 +37,11 @@ def get_parser():
                         help="Root path of the dataset genomic sequences for all species. Assumes the genomic files are organized in subdirectories named after the species. "
                         "E.g., <path_fna>/escherichia_coli/, <path_fna>/staphylococcus_aureus/, etc.")
     parser.add_argument("--path-csv", type=str, required=True,
-                        help="Path to the csv file containing specie x drug assembly id and mic values")
+                        help="Path to the csv file containing specie x drug assembly id and mic values. "
+                        "The labels are recomputed from the MIC values with the CLSI breakpoints, using the same filtering as "
+                        "data/reinterpret_data_with_mic.py.")
+    parser.add_argument("--path-clsi-bps", type=str, default="./datasets/breakpoints_per_species_20250527.csv",
+                        help="Path to the CLSI breakpoints file used to reinterpret the test labels from the MIC values.")
     parser.add_argument("--path-model", type=str, required=True,
                         help="Path to the trained model (must be a pkl file).")
     parser.add_argument("--path-out", type=str, default=".",
@@ -87,8 +91,15 @@ def _parse_model_filename(filename):
     return result
 
 
-def load_model_data(path_root_fna, path_data_csv, path_model, path_out):
-    ''' Given a path to a trained model, load the model and the test data, by extracting k-mer features.'''
+def get_reinterpreted_csv_path(path_out, pathogen, antibiotic):
+    ''' Path where the MIC-reinterpreted test CSV is saved by load_model_data.'''
+    return os.path.join(path_out, f"test_{pathogen}__{antibiotic}_SR_filt.csv")
+
+
+def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_clsi_bps):
+    ''' Given a path to a trained model, load the model and the test data, by extracting k-mer features.
+    The test labels are reinterpreted from the MIC values with the CLSI breakpoints, and the reinterpreted
+    CSV is saved to get_reinterpreted_csv_path(path_out, pathogen, antibiotic).'''
 
     if not os.path.isfile(path_data_csv):
         raise FileNotFoundError(f"Dataset CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
@@ -120,7 +131,12 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out):
     # ---------------------
     path_root_fna = os.path.join(path_root_fna, PATHOGEN_NAME_MAPPER[pathogen])
     logging.info("Loading test data from %s", path_data_csv)
-    test_datalist = load_data(path_data_csv, path_root_fna)
+    df_test = reinterpret_test_data(pd.read_csv(path_data_csv, low_memory=False),
+                                    PATHOGEN_NAME_MAPPER[pathogen], antibiotic, path_clsi_bps)
+    path_test_csv = get_reinterpreted_csv_path(path_out, pathogen, antibiotic)
+    df_test.to_csv(path_test_csv, index=False)
+    logging.info("Saved the reinterpreted test data to %s", path_test_csv)
+    test_datalist = load_data(path_test_csv, path_root_fna)
     logging.info("Number of test samples: %d", len(test_datalist))
 
     # ---------------------

@@ -18,7 +18,8 @@ import logging
 from tqdm import tqdm
 import argparse
 from data_utils import (plot_antibiotic_counts, plot_antibiotic_counts_per_organism, 
-    get_drugs_for_organism_clsi, get_mic_breakpoints, clean_breakpoints_file)
+    get_drugs_for_organism_clsi, get_mic_breakpoints, clean_breakpoints_file,
+    clean_ecoli_data, normalize_ast_names, add_revised_mic, reinterpret_drug_with_mic)
 
 
 
@@ -57,26 +58,6 @@ def get_parser():
 
     return parser
 
-
-def is_resistant(row, bp_r):
-    return row['MIC_revised'] >= bp_r
-
-
-def is_susceptible(row, bp_s):
-    return row['MIC_revised'] <= bp_s
-
-
-def clean_ecoli_data(df):
-    """
-    Clean the E. coli data by removing Shigella samples and keeping only E. coli samples.
-    """
-    # lowercase the 'Scientific name' column for case-insensitive comparison
-    df['Scientific name'] = df['Scientific name'].str.lower()
-
-    # filter out Shigella samples
-    df = df[~df['Scientific name'].str.contains('shigella', na=False)]
-
-    return df
 
 parser = get_parser()
 args, remaining = parser.parse_known_args()
@@ -171,15 +152,8 @@ def main(cfg: DictConfig):
     df = df.merge(df_isolates_common, on='Isolate', how='inner')
     # logger.info(f"Number of samples after merging with isolates: {len(df)}")
 
-    # make sure the 'Antibiotic' column is lowercase
-    df['Antibiotic'] = df['Antibiotic'].str.lower()
-    # replace space or '-' in drug names with underscore
-    df['Antibiotic'] = df['Antibiotic'].str.replace(' ', '_', regex=False)
-    df['Antibiotic'] = df['Antibiotic'].str.replace('-', '_', regex=False)
-
-    # same for Organism group
-    df['Organism group'] = df['Organism group'].str.lower()
-    df['Organism group'] = df['Organism group'].str.replace(' ', '_', regex=False)
+    # lowercase drug and organism names, with underscores for spaces (and '-' in drug names)
+    df = normalize_ast_names(df)
 
     # print number of resistant and susceptible samples (RAW DATASET)
     logger.info(f"Number of samples (RAW DATA): {len(df)}")
@@ -215,27 +189,8 @@ def main(cfg: DictConfig):
     logger.info(f"\tNumber of unknown samples: {len(df[df['Resistance phenotype'] == 'not defined'])}")
 
     # create a new column 'MIC_revised' that will contain the MIC values
-    # that are revised based on the CLSI breakpoints
-    df['MIC_revised'] = df['MIC (mg/L)'].copy()
-    # iterate through the dataframe and fill the 'MIC_revised' column
-    for i, (index, row) in enumerate(df.iterrows()):
-        # get the drug and organism for the current row
-        drug = row['Antibiotic']
-        organism = row['Organism group']
-
-        # check if the sample is resistant or susceptible
-        # NOTE: we do the reinterpretation for samples that are strictly > or < considering the double dilutions
-        # for samples with >= or == or <= we keep the original MIC value as they are typically at the breakpoint
-        if row['Measurement sign'] == '>':
-            df.at[index, 'MIC_revised'] = row['MIC (mg/L)'] * 2
-            # NOTE: why * 2? because phenotypic tests are tested for double dilutions. 
-            # e.g. if the test says MIC >32 then, it means that the measured MIC value is >= 64, 
-            # so with a breakpoint of 64 the category is resistant.
-            # But, if the measured MIC value is >16, then the test is inconclusive.
-
-        elif row['Measurement sign'] in ['<']:
-            df.at[index, 'MIC_revised'] = row['MIC (mg/L)'] / 2
-            
+    # that are revised based on the measurement sign (double dilutions)
+    df = add_revised_mic(df)
 
     drugs = sorted(df['Antibiotic'].unique().tolist())
 
@@ -254,69 +209,14 @@ def main(cfg: DictConfig):
             # filter out for the current drug
             df_new = df[df['Antibiotic'] == drug].copy()
 
-            # initialize the 'Phenotype_revised' column with NaN values
-            df_new['Phenotype_revised'] = np.nan
-            
             # get breakpoints for the current drug and organism
             bp_s, bp_r = get_mic_breakpoints(df_bps, organism, drug)
             if bp_s is None or bp_r is None:
                 logger.info(f"No breakpoints found for {organism} and {drug}. Skipping...")
                 continue
-            
-            # iterate through all the samples and classify them based on revised MIC values
-            bad_mic = {5.0, 25.0, 12.0}
-            n_bad_mic_kept, n_bad_mic_dropped = 0, 0
-            indices_to_drop = []
-            for i, (index, row) in enumerate(df_new.iterrows()):
-                if row['MIC (mg/L)'] in bad_mic: # THIS HAPPENS WHEN THE UPLOADER TO THE NCBI FORGOT A DECIMAL PLACE!
-                    # logger.info(f"Sample {row['#BioSample']} has MIC value {row['MIC (mg/L)']}, which is likely missing a decimal point. Using original label")
-                    if row['Resistance phenotype'] in ['resistant', 'susceptible']:
-                        df_new.at[index, 'Phenotype_revised'] = row['Resistance phenotype']
-                        # Fix the MIC_revised value to be what we consider the correct value based on whether the sample is resistant or susceptible
-                        if row['Resistance phenotype'] == 'susceptible' and not is_susceptible(row, bp_s):
-                            df_new.at[index, 'MIC_revised'] /= 100 # e.g. 25 --> 0.25
-                            if df_new.at[index, 'MIC_revised'] == 0.05: # Correct for the place value error with 5.0 --> 0.05, which should be 0.5
-                                df_new.at[index, 'MIC_revised'] = 0.5
-                        n_bad_mic_kept += 1
-                    else:
-                        # If the original label is not defined, we drop the sample
-                        indices_to_drop.append(index)
-                        n_bad_mic_dropped += 1
-                    continue
-                if is_resistant(row, bp_r):
-                    df_new.at[index, 'Phenotype_revised'] = 'resistant'
-                elif is_susceptible(row, bp_s):
-                    df_new.at[index, 'Phenotype_revised'] = 'susceptible'
-                else:
-                    # logger.info(f"Raw data show: '{row['Resistance phenotype']}' with {row['Measurement sign']} {row['MIC (mg/L)']} MIC (mg/L), but BP for {drug} is S: {bp_s}, R: {bp_r}. Dropping...")
-                    indices_to_drop.append(index)
 
-            if n_bad_mic_kept or n_bad_mic_dropped:
-                logger.info(
-                    f"{drug}: {n_bad_mic_kept + n_bad_mic_dropped} samples with non-dilution MIC "
-                    f"{sorted(bad_mic)} (likely lost decimal point): {n_bad_mic_kept} kept with the "
-                    f"original lab label, {n_bad_mic_dropped} dropped (no S/R lab label)")
-
-            # Drop samples outside the loop
-            if indices_to_drop:
-                df_new.drop(indices_to_drop, inplace=True)
-                # logger.info(f"Number of samples dropped for {drug} for CLSI breakpoint criteria mismatch: {len(indices_to_drop)}")
-            
-            # check if there any nan values in the 'Phenotype_revised' column
-            if df_new['Phenotype_revised'].isna().any():
-                logger.info(f"Warning: There are {df_new['Phenotype_revised'].isna().sum()} samples with NaN phenotype for {drug}.")
-
-            # Deduplicate assemblies: the same isolate can be tested on multiple AST platforms (e.g. Vitek, Microscan, Phoenix),
-            # giving multiple rows per assembly. Assemblies with conflicting revised phenotypes are dropped,
-            # otherwise only the first row is kept. 
-            num_phenotypes = df_new.groupby('Assembly')['Phenotype_revised'].transform('nunique')
-            conflicting_assemblies = df_new.loc[num_phenotypes > 1, 'Assembly'].unique()
-            num_rows_before_dedup = len(df_new)
-            df_new = df_new[num_phenotypes == 1]
-            df_new = df_new.drop_duplicates(subset=['Assembly'], keep='first')
-            num_dropped = num_rows_before_dedup - len(df_new)
-            if num_dropped > 0:
-                logger.info(f"{drug}: removed {num_dropped} duplicate rows, including {len(conflicting_assemblies)} assemblies dropped for conflicting phenotypes: {list(conflicting_assemblies)}")
+            # label with the breakpoints, drop intermediate samples, and deduplicate assemblies
+            df_new = reinterpret_drug_with_mic(df_new, bp_s, bp_r, drug, logger)
 
             num_resistant = len(df_new[df_new['Phenotype_revised'] == 'resistant'])
             num_susceptible = len(df_new[df_new['Phenotype_revised'] == 'susceptible'])

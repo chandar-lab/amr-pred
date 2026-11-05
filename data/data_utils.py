@@ -233,3 +233,191 @@ def get_folds_stats(folds, dist_table):
 
     return fold_stats, fold_distance_matrix
 
+
+
+# ================================
+# MIC reinterpretation with CLSI breakpoints
+# Shared by data/reinterpret_data_with_mic.py (training datasets) and testing/utils.py (test datasets)
+# ================================
+
+# Non-dilution MIC values; these happen when the uploader to the NCBI forgot a decimal place
+BAD_MIC_VALUES = {5.0, 25.0, 12.0}
+
+
+def clean_ecoli_data(df):
+    """
+    Clean the E. coli data by removing Shigella samples and keeping only E. coli samples.
+    """
+    # lowercase the 'Scientific name' column for case-insensitive comparison
+    df['Scientific name'] = df['Scientific name'].str.lower()
+
+    # filter out Shigella samples
+    df = df[~df['Scientific name'].str.contains('shigella', na=False)]
+
+    return df
+
+
+def normalize_ast_names(df):
+    """
+    Lowercase the 'Antibiotic' and 'Organism group' columns and replace spaces (and '-' in drug names)
+    with underscores, so that they match the names in the breakpoints file.
+    """
+    df['Antibiotic'] = df['Antibiotic'].str.lower()
+    df['Antibiotic'] = df['Antibiotic'].str.replace(' ', '_', regex=False)
+    df['Antibiotic'] = df['Antibiotic'].str.replace('-', '_', regex=False)
+
+    df['Organism group'] = df['Organism group'].str.lower()
+    df['Organism group'] = df['Organism group'].str.replace(' ', '_', regex=False)
+    return df
+
+
+def add_revised_mic(df):
+    """
+    Add the 'MIC_revised' column: the MIC value corrected for the measurement sign.
+    """
+    df['MIC_revised'] = df['MIC (mg/L)'].copy()
+    for index, row in df.iterrows():
+        # NOTE: we do the reinterpretation for samples that are strictly > or < considering the double dilutions
+        # for samples with >= or == or <= we keep the original MIC value as they are typically at the breakpoint
+        if row['Measurement sign'] == '>':
+            df.at[index, 'MIC_revised'] = row['MIC (mg/L)'] * 2
+            # NOTE: why * 2? because phenotypic tests are tested for double dilutions.
+            # e.g. if the test says MIC >32 then, it means that the measured MIC value is >= 64,
+            # so with a breakpoint of 64 the category is resistant.
+            # But, if the measured MIC value is >16, then the test is inconclusive.
+        elif row['Measurement sign'] in ['<']:
+            df.at[index, 'MIC_revised'] = row['MIC (mg/L)'] / 2
+    return df
+
+
+def reinterpret_drug_with_mic(df_new, bp_s, bp_r, drug, logger=logging):
+    """
+    Label the samples of a single species x drug dataframe (with 'MIC_revised') using the CLSI breakpoints.
+    Adds the 'Phenotype_revised' column, drops samples between the breakpoints (intermediate),
+    handles the non-dilution MIC values, and deduplicates assemblies.
+    Returns the filtered dataframe.
+    """
+    df_new = df_new.copy()
+    # initialize the 'Phenotype_revised' column with NaN values
+    df_new['Phenotype_revised'] = pd.Series(np.nan, index=df_new.index, dtype=object)
+
+    # iterate through all the samples and classify them based on revised MIC values
+    n_bad_mic_kept, n_bad_mic_dropped = 0, 0
+    indices_to_drop = []
+    for index, row in df_new.iterrows():
+        if row['MIC (mg/L)'] in BAD_MIC_VALUES: # THIS HAPPENS WHEN THE UPLOADER TO THE NCBI FORGOT A DECIMAL PLACE!
+            if row['Resistance phenotype'] in ['resistant', 'susceptible']:
+                df_new.at[index, 'Phenotype_revised'] = row['Resistance phenotype']
+                # Fix the MIC_revised value to be what we consider the correct value based on whether the sample is resistant or susceptible
+                if row['Resistance phenotype'] == 'susceptible' and not row['MIC_revised'] <= bp_s:
+                    df_new.at[index, 'MIC_revised'] /= 100 # e.g. 25 --> 0.25
+                    if df_new.at[index, 'MIC_revised'] == 0.05: # Correct for the place value error with 5.0 --> 0.05, which should be 0.5
+                        df_new.at[index, 'MIC_revised'] = 0.5
+                n_bad_mic_kept += 1
+            else:
+                # If the original label is not defined, we drop the sample
+                indices_to_drop.append(index)
+                n_bad_mic_dropped += 1
+            continue
+        if row['MIC_revised'] >= bp_r:
+            df_new.at[index, 'Phenotype_revised'] = 'resistant'
+        elif row['MIC_revised'] <= bp_s:
+            df_new.at[index, 'Phenotype_revised'] = 'susceptible'
+        else:
+            # between the breakpoints (intermediate): drop
+            indices_to_drop.append(index)
+
+    if n_bad_mic_kept or n_bad_mic_dropped:
+        logger.info(
+            f"{drug}: {n_bad_mic_kept + n_bad_mic_dropped} samples with non-dilution MIC "
+            f"{sorted(BAD_MIC_VALUES)} (likely lost decimal point): {n_bad_mic_kept} kept with the "
+            f"original lab label, {n_bad_mic_dropped} dropped (no S/R lab label)")
+
+    # Drop samples outside the loop
+    if indices_to_drop:
+        df_new.drop(indices_to_drop, inplace=True)
+
+    # check if there any nan values in the 'Phenotype_revised' column
+    if df_new['Phenotype_revised'].isna().any():
+        logger.info(f"Warning: There are {df_new['Phenotype_revised'].isna().sum()} samples with NaN phenotype for {drug}.")
+
+    # Deduplicate assemblies: the same isolate can be tested on multiple AST platforms (e.g. Vitek, Microscan, Phoenix),
+    # giving multiple rows per assembly. Assemblies with conflicting revised phenotypes are dropped,
+    # otherwise only the first row is kept.
+    num_phenotypes = df_new.groupby('Assembly')['Phenotype_revised'].transform('nunique')
+    conflicting_assemblies = df_new.loc[num_phenotypes > 1, 'Assembly'].unique()
+    num_rows_before_dedup = len(df_new)
+    df_new = df_new[num_phenotypes == 1]
+    df_new = df_new.drop_duplicates(subset=['Assembly'], keep='first')
+    num_dropped = num_rows_before_dedup - len(df_new)
+    if num_dropped > 0:
+        logger.info(f"{drug}: removed {num_dropped} duplicate rows, including {len(conflicting_assemblies)} assemblies dropped for conflicting phenotypes: {list(conflicting_assemblies)}")
+
+    return df_new
+
+
+def reinterpret_test_data(df, organism, drug, path_clsi_bps, logger=logging):
+    """
+    Apply the same filtering and MIC reinterpretation as data/reinterpret_data_with_mic.py to a test dataframe
+    for one species x drug. The dataframe needs the NCBI AST columns ('Organism group', 'Antibiotic',
+    'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype') plus 'Assembly'
+    ('Scientific name' too for E. coli). Any existing 'MIC_revised'/'Phenotype_revised' columns are recomputed.
+    """
+    required = ['Organism group', 'Antibiotic', 'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype', 'Assembly']
+    if organism == "escherichia_coli":
+        required.append('Scientific name')
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Test CSV is missing the columns {missing} needed for the MIC reinterpretation.")
+
+    df_orig = df.copy()
+    df = df.drop(columns=['MIC_revised', 'Phenotype_revised'], errors='ignore')
+    logger.info(f"Reinterpreting the test data with CLSI breakpoints ({len(df)} rows)")
+
+    if organism == "escherichia_coli":
+        n_before = len(df)
+        df = clean_ecoli_data(df)
+        logger.info(f"Removed {n_before - len(df)} Shigella samples")
+        df['Organism group'] = 'escherichia_coli'
+
+    df = normalize_ast_names(df)
+    df.loc[df['Organism group'] == 'acinetobacter_calcoaceticus/baumannii_complex', 'Organism group'] = 'acinetobacter_baumannii'
+
+    # keep the rows for the model's species and drug
+    n_before = len(df)
+    df = df[(df['Organism group'] == organism) & (df['Antibiotic'] == drug)]
+    if len(df) < n_before:
+        logger.info(f"Removed {n_before - len(df)} rows for other species/drugs than {organism} x {drug}")
+
+    # drop the samples with no assembly or no MIC value
+    n_before = len(df)
+    df = df.dropna(subset=['Assembly', 'MIC (mg/L)'])
+    if len(df) < n_before:
+        logger.info(f"Removed {n_before - len(df)} rows with no assembly or NaN MIC values")
+
+    bp_s, bp_r = get_mic_breakpoints(clean_breakpoints_file(path_clsi_bps), organism, drug)
+    if bp_s is None or bp_r is None:
+        raise ValueError(f"No CLSI breakpoints found for {organism} x {drug} in {path_clsi_bps}.")
+
+    df = add_revised_mic(df)
+    n_before = len(df)
+    df = reinterpret_drug_with_mic(df, bp_s, bp_r, drug, logger)
+    logger.info(f"Removed {n_before - len(df)} rows with intermediate MIC, undefined non-dilution MIC, or duplicate/conflicting assemblies")
+
+    if len(df) == 0:
+        raise ValueError(f"No test samples left for {organism} x {drug} after the MIC reinterpretation.")
+    logger.info(f"Test samples after reinterpretation (CLSI S <= {bp_s}, R >= {bp_r}): {len(df)} "
+                f"({(df['Phenotype_revised'] == 'resistant').sum()} resistant, "
+                f"{(df['Phenotype_revised'] == 'susceptible').sum()} susceptible)")
+
+    # report how the labels compare to the ones given in the CSV
+    if 'Phenotype_revised' in df_orig.columns:
+        given = df_orig.loc[df.index, 'Phenotype_revised']
+        n_diff = int((given != df['Phenotype_revised']).sum())
+        if n_diff:
+            logger.warning(f"{n_diff} kept samples had a different 'Phenotype_revised' in the input CSV; using the reinterpreted labels")
+    n_flipped = int(df['Resistance phenotype'].isin(['resistant', 'susceptible']).sum()
+                    - (df['Resistance phenotype'] == df['Phenotype_revised']).sum())
+    logger.info(f"Samples whose lab S/R label differs from the reinterpreted label: {n_flipped}")
+
+    return df

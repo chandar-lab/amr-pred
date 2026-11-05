@@ -14,7 +14,7 @@ import argparse
 import os
 import logging
 from Bio import SeqIO
-from testing.utils import get_parser, load_model_data, PATHOGEN_NAME_MAPPER, load_data
+from testing.utils import get_parser, load_model_data, get_reinterpreted_csv_path, PATHOGEN_NAME_MAPPER, load_data
 
 
 def main():
@@ -37,7 +37,7 @@ def main():
 
     # Load model and data
     _, X_test, y_test, model_info, _ = load_model_data(
-        path_root_fna, path_data_csv, path_model, path_out
+        path_root_fna, path_data_csv, path_model, path_out, args.path_clsi_bps
     )
     pathogen = model_info['pathogen']
     antibiotic = model_info['antibiotic']
@@ -58,7 +58,7 @@ def main():
 
     logging.info("--- FASTA file statistics ---")
     path_root_fna = os.path.join(path_root_fna, PATHOGEN_NAME_MAPPER[pathogen])
-    test_datalist = load_data(path_data_csv, path_root_fna)
+    test_datalist = load_data(get_reinterpreted_csv_path(path_out, pathogen, antibiotic), path_root_fna)
     # Calculate average genome length and contig values
     total_length = 0
     num_contigs = 0
