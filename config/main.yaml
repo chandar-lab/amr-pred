@@ -57,6 +57,9 @@ clustering_method: "hierarchical" # Options: "hierarchical", "unordered". Only u
 # Arguments for sweeps
 use_sweeps: True
 sweep_runs_per_fold: 25
+# Save every sweep trial (number, parameters, validation score, times) as trials_<part>.csv in the run's checkpoint
+# directory, e.g. to plot the best score against the number of trials. Off by default to save time and space.
+save_sweep_trials: False
 
 
 wandb:

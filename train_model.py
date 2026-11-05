@@ -164,6 +164,19 @@ def expected_solver(model, config, stored_params):
     return model
 
 
+def save_sweep_trials(study, config, checkpoint_dir, part):
+    """With save_sweep_trials, write the sweep's trials to <checkpoint_dir>/trials_<part>.csv (part: fold index or "full")."""
+    if not config.get("save_sweep_trials"):
+        return
+    if not checkpoint_dir:
+        logger.warning("save_sweep_trials is on but this run has no checkpoint directory; not saving the trials.")
+        return
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    path = os.path.join(checkpoint_dir, f"trials_{part}.csv")
+    study.trials_dataframe().sort_values("number").to_csv(path, index=False)
+    logger.info(f"Saved {len(study.trials)} sweep trials to {path}")
+
+
 def resolve_device(device):
     """Device for models that support one (XGBoost): "auto" is "cuda" when a GPU is visible, else "cpu"."""
     if device != "auto":
@@ -243,11 +256,12 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         if use_sweeps:
             logger.info(f"Running Optuna sweep for fold {fold_idx+1}...")
             trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X_train, y_train, fold_idx)
-            trainer.optimize(
+            study = trainer.optimize(
                 n_trials=config.sweep_runs_per_fold,
                 study_name=f"{sweep_config['name']}__fold_{fold_idx+1}",
                 n_jobs=sweep_n_jobs,
             )
+            save_sweep_trials(study, config, checkpoint_dir, fold_idx)
             
             logger.info(
                 f"Best parameters in fold {fold_idx+1}: {trainer.best_params} "
@@ -359,11 +373,12 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         if use_sweeps:
                 logger.info(f"Running Optuna sweep for full dataset...")
                 trainer = OptunaFoldTrainer(current_model, fixed_run_config, sweep_config, X_full, pheno, "full") # fold_idx of "full" indicates this is the final model training on the full dataset
-                trainer.optimize(
+                study = trainer.optimize(
                     n_trials=config.sweep_runs_per_fold,
                     study_name=f"{sweep_config['name']}__full",
                     n_jobs=sweep_n_jobs,
                 )
+                save_sweep_trials(study, config, checkpoint_dir, "full")
                 
                 logger.info(
                     f"Best parameters on full data: {trainer.best_params} "
