@@ -51,16 +51,19 @@ def compute_idf(X):
     return np.log((1 + n_samples) / (1 + df)) + 1.0
 
 
-def apply_tfidf(X, idf, group_sizes=None, constant_sq_norm=0.0):
+def apply_tfidf(X, idf, group_sizes=None, constant_sq_norm=0.0, scale_groups=False):
     """
     TF-IDF with l2 row normalization, matching sklearn's TfidfTransformer(norm='l2'), on dense float64 output.
 
     With group_sizes (a grouped matrix), column j counts group_sizes[j] times in each row's norm,
     and constant_sq_norm adds back the dropped constant columns, which gives the same values as the
-    ungrouped matrix at the representative columns. Works in row chunks, so the only large allocation is the output.
+    ungrouped matrix at the representative columns. With scale_groups, column j is then multiplied by
+    sqrt(group_sizes[j]), so dot products and euclidean distances between rows are the ungrouped ones
+    (without the constant columns), e.g. for kNN. Works in row chunks, so the only large allocation is the output.
     """
     n_rows, n_cols = X.shape
     weights = None if group_sizes is None else np.asarray(group_sizes, dtype=np.float64)
+    col_scale = np.sqrt(weights) if scale_groups and weights is not None else None
     chunk = max(1, (64 * 2**20) // max(1, n_cols * 8))
     out = np.empty((n_rows, n_cols), dtype=np.float64)
     for start in range(0, n_rows, chunk):
@@ -75,6 +78,8 @@ def apply_tfidf(X, idf, group_sizes=None, constant_sq_norm=0.0):
         norms = np.sqrt(sq_norms + constant_sq_norm)
         norms[norms == 0] = 1.0
         block /= norms[:, None]
+        if col_scale is not None:
+            block *= col_scale
     return out
 
 def train_val_svd(X_train, X_val, k=150):

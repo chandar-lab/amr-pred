@@ -1,0 +1,45 @@
+# Full list of kwargs:
+# https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html
+name: "KNN"
+
+params:
+  _target_: sklearn.neighbors.KNeighborsClassifier
+  n_neighbors: 5
+  weights: distance
+  # Brute force: tree indexes don't help with this many columns, and euclidean distances are one BLAS matrix product
+  algorithm: brute
+  # On l2-normalized TF-IDF rows, euclidean distance ranks neighbours the same as cosine distance, and is faster
+  metric: euclidean
+  n_jobs: -1
+  # No class balancing: sklearn's kNN has no class_weight
+
+# Only cross-validated: skip the full-dataset model, and save no model, TF-IDF or k-mer files (a kNN model is its
+# whole training matrix)
+fit_full_model: false
+
+# Fit TF-IDF (smoothed idf, l2 rows) on the training rows of each fold, as for LGR.
+# Without it, distances are dominated by k-mers present in nearly every genome and by high-count repeats.
+use_tfidf: true
+# With grouped columns, scale each column by sqrt(number of k-mers in its group) after TF-IDF, so distances between
+# training genomes are the ungrouped ones (without the constant columns). Without it, a gene merged into one column
+# counts as one k-mer.
+tfidf_scale_groups: true
+
+# Sweep trials run at once: the distance computation uses all CPUs (BLAS) itself
+sweep_n_jobs: 1
+
+sweep:
+  method: bayes
+  metric:
+    name: val_balanced_accuracy
+    goal: maximize
+  parameters:
+    # Phylogenetic folds hold out whole clusters, so close relatives of a test genome are rarely in training;
+    # small k follows the nearest (distant) relative, larger k votes over the clade. 50 is ~3% of the
+    # inner training genomes of the smallest datasets.
+    n_neighbors:
+      distribution: int_log_uniform
+      min: 1
+      max: 50
+    weights:
+      values: [uniform, distance]

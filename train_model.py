@@ -177,6 +177,19 @@ def save_sweep_trials(study, config, checkpoint_dir, part):
     logger.info(f"Saved {len(study.trials)} sweep trials to {path}")
 
 
+def full_model_skip_reason(config):
+    """Why the full-dataset model (and the saved model, TF-IDF and k-mer files) is skipped, or None to train it.
+
+    model.fit_full_model: false skips it for models that are only cross-validated (e.g. KNN). With SVD it is always
+    skipped: the fitted SVD isn't saved, so the model couldn't be applied to new data.
+    """
+    if config.matrix.reduce_dimensionality:
+        return "SVD is on"
+    if not config.model.get("fit_full_model", True):
+        return f"model.fit_full_model is false for {config.model.name}"
+    return None
+
+
 def resolve_device(device):
     """Device for models that support one (XGBoost): "auto" is "cuda" when a GPU is visible, else "cpu"."""
     if device != "auto":
@@ -346,12 +359,11 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         return None
 
     # --- Train final model on the full dataset, for testing on alternate datasets ---
-    # With SVD, the full-dataset model is skipped: the fitted SVD isn't saved, so it couldn't be applied to new data
-    reduce_dim = config.matrix.reduce_dimensionality
-    checkpoint = load_full_checkpoint(checkpoint_dir) if checkpoint_dir and not reduce_dim else None
-    if reduce_dim:
+    skip_reason = full_model_skip_reason(config)
+    checkpoint = load_full_checkpoint(checkpoint_dir) if checkpoint_dir and not skip_reason else None
+    if skip_reason:
         full_train_model = None
-        logger.info("SVD is on: skipping the full-dataset model.")
+        logger.info(f"Skipping the full-dataset model: {skip_reason}.")
     elif checkpoint is not None:
         full_train_model, idf = checkpoint
         if not use_sweeps:
@@ -517,18 +529,20 @@ def main(cfg: DictConfig):
     
 
     
-    # NOTE: when using the logistic classifier, normalize the feature matrix using TF-IDF 
-    # because LGR is sensitive to feature scaling
+    # NOTE: models with model.use_tfidf (LGR, KNN) get the feature matrix normalized with TF-IDF,
+    # because they are sensitive to feature scaling
     # The idf is saved with the model so that inference applies the same transformation.
     # With grouped columns, CV groups each fold's columns on its training rows and builds the test fold
     # like inference does (group medians), and TF-IDF is fit per fold. For grouped columns, each column
     # counts once per merged k-mer in the row norms, plus the dropped constant columns.
     tfidf_idf = None
     fold_features = None
+    use_tfidf = bool(cfg.model.get("use_tfidf", False))
+    tfidf_scale_groups = bool(cfg.model.get("tfidf_scale_groups", False)) and cfg.matrix.group_columns
     if cfg.matrix.group_columns:
         fold_features = FoldFeatures(kmer_features.group_sizes, kmer_features.constant_sq_norm,
-                                     use_tfidf=cfg.model.name == "LGR")
-    elif cfg.model.name == "LGR":
+                                     use_tfidf=use_tfidf, scale_groups=tfidf_scale_groups)
+    elif use_tfidf:
         logger.info(f"Normalizing feature matrix using TF-IDF for {cfg.model.name} model ...")
         tfidf_idf = compute_idf(X)
         X = apply_tfidf(X, tfidf_idf)
@@ -617,6 +631,9 @@ def main(cfg: DictConfig):
 
     # Train a single fold (or the full-dataset model) as its own job; a later run without only_fold collects the results
     only_fold = cfg.only_fold
+    if only_fold == "full" and full_model_skip_reason(cfg):
+        logger.warning(f"only_fold=full, but the full-dataset model is skipped ({full_model_skip_reason(cfg)}); nothing to do.")
+        return
     if only_fold is not None:
         if only_fold != "full" and not (isinstance(only_fold, int) and 0 <= only_fold < cfg.num_folds):
             raise ValueError(f"only_fold must be a fold index in [0, {cfg.num_folds}) or 'full', got {only_fold!r}")
@@ -669,25 +686,28 @@ def main(cfg: DictConfig):
         os.makedirs(os.path.join(path_species, "models"), exist_ok=True)
         os.makedirs(os.path.join(path_species, "results"), exist_ok=True)
         
-        # save the best model
-        if full_train_model is not None:  # None with SVD, which skips the full-dataset model
+        # save the best model, with what inference needs (TF-IDF parameters, k-mers).
+        # None when the full-dataset model is skipped (SVD, or model.fit_full_model: false): nothing is saved
+        if full_train_model is not None:
             save_fname_model = f"model_{run_name}.pkl"
             path_out_model = os.path.join(path_species, "models", save_fname_model)
             logger.info(f"Saving the best model to {path_out_model} ...")
             joblib.dump(full_train_model, path_out_model)
 
         # save the TF-IDF parameters next to the model, for inference
-        if tfidf_idf is not None:
+        if full_train_model is not None and tfidf_idf is not None:
             tfidf_params = {"idf": tfidf_idf}
             if kmer_features.group_sizes is not None:
                 tfidf_params["group_sizes"] = kmer_features.group_sizes
                 tfidf_params["constant_sq_norm"] = kmer_features.constant_sq_norm
+                tfidf_params["scale_groups"] = tfidf_scale_groups
             path_out_tfidf = os.path.join(path_species, "models", f"tfidf_{run_name}.npz")
             logger.info(f"Saving the TF-IDF parameters to {path_out_tfidf} ...")
             np.savez(path_out_tfidf, **tfidf_params)
 
         # save kmers for this size
-        save_model_kmers(kmer_features, os.path.join(path_species, "models"), patho_short, antibiotic, k, feature_mode, feat)
+        if full_train_model is not None:
+            save_model_kmers(kmer_features, os.path.join(path_species, "models"), patho_short, antibiotic, k, feature_mode, feat)
 
         # Create the output results directory
         os.makedirs(os.path.join(path_species, "results"), exist_ok=True)

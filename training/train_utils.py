@@ -96,21 +96,22 @@ class FoldFeatures:
     - In each fold, columns are grouped again using only the fold's training rows (the final model's
       groups also come from its training data only), and the test fold's columns are the median over
       each group's k-mers, as at inference.
-    - For LGR, TF-IDF is fit on the training rows only.
+    - With use_tfidf (LGR, KNN), TF-IDF is fit on the training rows only; scale_groups as in apply_tfidf.
     """
 
-    def __init__(self, group_sizes, constant_sq_norm, use_tfidf):
+    def __init__(self, group_sizes, constant_sq_norm, use_tfidf, scale_groups=False):
         self.group_sizes = group_sizes
         self.constant_sq_norm = constant_sq_norm
         self.use_tfidf = use_tfidf
+        self.scale_groups = scale_groups
         self.idf = None     # TF-IDF of the final model, set by full()
 
     def fold(self, X_train, X_test):
         X_train, X_test, sizes, const_sq = regroup_fold(X_train, X_test, self.group_sizes, self.constant_sq_norm)
         if self.use_tfidf:
             idf = compute_idf(X_train)
-            X_train = apply_tfidf(X_train, idf, sizes, const_sq)
-            X_test = apply_tfidf(X_test, idf, sizes, const_sq)
+            X_train = apply_tfidf(X_train, idf, sizes, const_sq, self.scale_groups)
+            X_test = apply_tfidf(X_test, idf, sizes, const_sq, self.scale_groups)
         return X_train, X_test
 
     def full(self, X):
@@ -118,4 +119,4 @@ class FoldFeatures:
         if not self.use_tfidf:
             return X
         self.idf = compute_idf(X)
-        return apply_tfidf(X, self.idf, self.group_sizes, self.constant_sq_norm)
+        return apply_tfidf(X, self.idf, self.group_sizes, self.constant_sq_norm, self.scale_groups)

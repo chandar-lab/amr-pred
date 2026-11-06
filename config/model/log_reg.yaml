@@ -20,6 +20,12 @@ large_matrix_params:
   solver: saga
   max_iter: 1000
 
+# Fit TF-IDF (smoothed idf, l2 rows) on the training rows of each part and save it with the model: LGR is sensitive to feature scaling
+use_tfidf: true
+
+# Only cross-validated: skip the full-dataset model, and save no model, TF-IDF or k-mer files for inference
+fit_full_model: false
+
 # Sweep trials run at once: liblinear uses one CPU, so run trials in parallel (-1: all CPUs of the job)
 sweep_n_jobs: -1
 

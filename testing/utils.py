@@ -148,15 +148,18 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_cls
     # ---------------------
     model_parent_path = os.path.dirname(path_model)
 
-    # Logistic regression needs the TF-IDF parameters from training; check before the slow feature extraction
-    path_tfidf = None
-    if model_info['model_name'].startswith('LGR'):
-        model_stem = os.path.basename(path_model)[len("model_"):-len(".pkl")]
-        path_tfidf = os.path.join(model_parent_path, f"tfidf_{model_stem}.npz")
-        if not os.path.isfile(path_tfidf):
+    # Models trained on TF-IDF features (LGR, KNN with model.use_tfidf) need its parameters from training;
+    # check before the slow feature extraction
+    model_stem = os.path.basename(path_model)[len("model_"):-len(".pkl")]
+    path_tfidf = os.path.join(model_parent_path, f"tfidf_{model_stem}.npz")
+    if not os.path.isfile(path_tfidf):
+        if model_info['model_name'].startswith('KNN'):
+            logging.warning(f"No TF-IDF parameters at {path_tfidf}; assuming this KNN model was trained without TF-IDF.")
+        elif model_info['model_name'].startswith('LGR'):
             raise FileNotFoundError(
                 f"TF-IDF parameters not found: {path_tfidf}. This LGR model was trained before the TF-IDF "
                 "parameters were saved, so its inputs cannot be reproduced; please retrain it.")
+        path_tfidf = None
 
     # Grouped models (model name ends in "_grp") use k-mer groups: each column is the median over its k-mers
     grouped = model_info['model_name'].endswith('_grp')
@@ -217,6 +220,7 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_cls
             idf = tfidf_params['idf']
             group_sizes = tfidf_params['group_sizes'] if 'group_sizes' in tfidf_params else None
             const_sq = float(tfidf_params['constant_sq_norm']) if 'constant_sq_norm' in tfidf_params else 0.0
-        X_test = apply_tfidf(X_test, idf, group_sizes, const_sq)
+            scale_groups = bool(tfidf_params['scale_groups']) if 'scale_groups' in tfidf_params else False
+        X_test = apply_tfidf(X_test, idf, group_sizes, const_sq, scale_groups)
 
     return model, X_test, y_test, model_info, kmer_features

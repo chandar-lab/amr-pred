@@ -15,6 +15,9 @@ params:
 # XGBoost's counterpart of class_weight="balanced": it matches the balanced-accuracy metric (e_coli imipenem is 1% resistant)
 balance_classes: true
 
+# Train the full-dataset model after CV and save it (with its TF-IDF and k-mer files) for inference
+fit_full_model: true
+
 # Sweep trials run at once: XGBoost uses all CPUs (or the GPU) itself
 sweep_n_jobs: 1
 

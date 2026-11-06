@@ -15,6 +15,9 @@ params:
   min_samples_leaf: 1
   max_features: sqrt
 
+# Only cross-validated: skip the full-dataset model, and save no model, TF-IDF or k-mer files for inference
+fit_full_model: false
+
 # Sweep trials run at once: random forests use all CPUs (n_jobs: -1) themselves
 sweep_n_jobs: 1
 
