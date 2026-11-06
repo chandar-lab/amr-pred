@@ -76,6 +76,10 @@ class OptunaFoldTrainer:
                 model_params[name] = trial.suggest_float(
                     name, spec["min"], spec["max"], log=True
                 )
+            elif spec.get("distribution") == "int_uniform":
+                model_params[name] = trial.suggest_int(name, spec["min"], spec["max"])
+            elif spec.get("distribution") == "int_log_uniform":
+                model_params[name] = trial.suggest_int(name, spec["min"], spec["max"], log=True)
             else:
                 raise ValueError(
                     f"Unsupported sweep parameter specification for {name}: {spec}"

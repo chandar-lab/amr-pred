@@ -26,28 +26,44 @@ sweep:
     name: val_balanced_accuracy # Must match the metric logged in WandbFoldTrainer
     goal: maximize # 'maximize' or 'minimize'
     
-  # Note: Parameter names here must match the model's __init__ argument names    
-  parameters:  
-    # learning_rate:
-    #   distribution: uniform
-    #   min: 0.01
-    #   max: 0.3
-    
+  # Note: Parameter names here must match the model's __init__ argument names.
+  # Ranges as the wide space tested in claude_diag_sweep/diag_wide.py (2026-10-30), with max_depth kept at [3, 6, 9].
+  # scale_pos_weight isn't swept: balance_classes sets it from the training genomes.
+  parameters:
     max_depth:
       values: [3, 6, 9]
-      
-    # Log-uniform distribution
+
+    learning_rate:
+      distribution: log_uniform_values
+      min: 0.01
+      max: 0.3
+
+    n_estimators:
+      distribution: int_log_uniform
+      min: 50
+      max: 1000
+
+    colsample_bytree:
+      distribution: uniform
+      min: 0.05
+      max: 1.0
+
+    min_child_weight:
+      distribution: log_uniform_values
+      min: 0.5
+      max: 20.0
+
+    reg_lambda:
+      distribution: log_uniform_values
+      min: 0.1
+      max: 20.0
+
     gamma:
       distribution: log_uniform_values
       min: 0.01
       max: 10.0
-      
+
     subsample:
       distribution: uniform
       min: 0.6
       max: 1.0
-      
-    # colsample_bytree:
-    #   distribution: uniform
-    #   min: 0.5
-    #   max: 1.0

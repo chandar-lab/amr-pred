@@ -10,7 +10,7 @@ params:
   random_state: ${seed}
   class_weight: balanced
   # Default settings for the model before the sweep
-  n_estimators: 100
+  n_estimators: 500  # Fixed, not swept: more trees never hurt RF accuracy, only cost time
   min_samples_split: 2
   min_samples_leaf: 1
   max_features: sqrt
@@ -25,11 +25,16 @@ sweep:
     name: val_balanced_accuracy
     goal: maximize
   parameters:
-    n_estimators:
-      values: [100, 300, 500]
+    # Grouping merges duplicate k-mer columns, so a resistance gene is only a few columns out of the
+    # ~10k-4M grouped ones: sqrt rarely samples it at a split. Fractions scale with the column count.
     max_features:
-      values: ['sqrt', 'log2', 0.1]
+      values: ['sqrt', 0.01, 0.03]
     max_depth:
-      values: [None, 10, 30]
+      values: [null, 10]  # null is None (unlimited depth); the string "None" would fail in sklearn.
+                          # 30 dropped: with a few thousand genomes, trees rarely get that deep, so it acts like null
     min_samples_leaf:
       values: [1, 2, 4]
+    # Fraction of genomes each tree's bootstrap draws (null: as many as the training set). Smaller
+    # samples decorrelate trees over the clustered lineages and halve the time per tree
+    max_samples:
+      values: [null, 0.5]
