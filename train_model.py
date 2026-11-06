@@ -13,6 +13,7 @@ import pandas as pd
 import pickle
 from omegaconf import DictConfig, OmegaConf
 
+from sklearn.svm import LinearSVC
 from sklearn.base import clone
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (
@@ -135,21 +136,31 @@ def balance_classes(model, config, y_train):
 LIBLINEAR_MAX_NONZERO = 2**31 - 1
 
 
+def uses_liblinear(model):
+    """Whether the model trains with liblinear: LinearSVC, or LogisticRegression with solver="liblinear"."""
+    return isinstance(model, LinearSVC) or model.get_params().get("solver") == "liblinear"
+
+
 def solver_for_matrix(model, config, X):
     """With model.large_matrix_params, use those parameters (e.g. saga) when liblinear can't train on X.
 
     liblinear counts the nonzero values in a 32-bit int, and adds up to 2 per row (the intercept and an end marker),
     so it overflows above 2^31 - 1 of them. The choice is made once per part (fold training rows or the full dataset),
-    and its sweep trials use the same solver.
+    and its sweep trials use the same solver. Models without large_matrix_params (LinearSVC has no other solver)
+    raise an error instead of overflowing.
     """
-    params = config.model.get("large_matrix_params")
-    if params and model.get_params().get("solver") == "liblinear":
-        n_nonzero = int(np.count_nonzero(X)) + 2 * X.shape[0]
-        if n_nonzero > LIBLINEAR_MAX_NONZERO:
-            params = OmegaConf.to_container(params, resolve=True)
-            logger.info(f"{n_nonzero:,} nonzero values are more than liblinear can index ({LIBLINEAR_MAX_NONZERO:,}); "
-                        f"using {params} instead.")
-            model.set_params(**params)
+    if not uses_liblinear(model):
+        return model
+    n_nonzero = int(np.count_nonzero(X)) + 2 * X.shape[0]
+    if n_nonzero > LIBLINEAR_MAX_NONZERO:
+        params = config.model.get("large_matrix_params")
+        if not params:
+            raise ValueError(f"{n_nonzero:,} nonzero values are more than liblinear can index ({LIBLINEAR_MAX_NONZERO:,}), "
+                             f"so {type(model).__name__} can't train on this matrix ({X.shape[0]:,} x {X.shape[1]:,}).")
+        params = OmegaConf.to_container(params, resolve=True)
+        logger.info(f"{n_nonzero:,} nonzero values are more than liblinear can index ({LIBLINEAR_MAX_NONZERO:,}); "
+                    f"using {params} instead.")
+        model.set_params(**params)
     return model
 
 

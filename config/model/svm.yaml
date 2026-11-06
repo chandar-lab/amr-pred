@@ -1,0 +1,46 @@
+# Full list of kwargs:
+# https://scikit-learn.org/stable/modules/generated/sklearn.svm.LinearSVC.html
+# Linear SVM (liblinear). Kernel SVC (libsvm) is single-threaded and computes every pairwise kernel value over all
+# columns: ~4,000 genomes x 1M columns is hours per fit, too slow for 25 sweep trials per part.
+name: "SVM"
+
+params:
+  _target_: sklearn.svm.LinearSVC
+  # Standard soft-margin SVM: hinge loss with an l2 penalty (the sweep also tries squared hinge)
+  penalty: l2
+  loss: hinge
+  # Dual coordinate descent: suits few genomes x many columns, and hinge loss needs it
+  dual: true
+  C: 1.0
+  # Weight classes inversely to their frequency, matching the balanced-accuracy metric (e_coli imipenem is 1% resistant)
+  class_weight: balanced
+  max_iter: 5000
+  random_state: ${seed}
+
+# Only cross-validated: skip the full-dataset model, and save no model, TF-IDF or k-mer files for inference
+fit_full_model: false
+
+# Fit TF-IDF (smoothed idf, l2 rows) on the training rows of each fold, as for LGR: SVMs are sensitive to feature scaling
+use_tfidf: true
+# With grouped columns, scale each column by sqrt(number of k-mers in its group) after TF-IDF. With an l2 penalty,
+# s identical columns act as one column scaled by sqrt(s), so this trains the same SVM as on the ungrouped columns.
+# (LGR leaves it off: with its l1 penalty, duplicate columns act as one unscaled column.)
+tfidf_scale_groups: true
+
+# Sweep trials run at once: liblinear uses one CPU, so run trials in parallel (-1: all CPUs of the job)
+sweep_n_jobs: -1
+
+sweep:
+  method: bayes
+  metric:
+    name: val_balanced_accuracy
+    goal: maximize
+  parameters:
+    # Inverse of the regularization strength. TF-IDF rows have unit norm, so the training genomes are usually
+    # separable with 1M columns: above ~10 the margin is close to hard and C barely changes the model
+    C:
+      distribution: log_uniform_values
+      min: 0.001
+      max: 100.0
+    loss:
+      values: [hinge, squared_hinge]
