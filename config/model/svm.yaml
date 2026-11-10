@@ -14,7 +14,7 @@ params:
   C: 1.0
   # Weight classes inversely to their frequency, matching the balanced-accuracy metric (e_coli imipenem is 1% resistant)
   class_weight: balanced
-  max_iter: 5000
+  max_iter: 1000
   random_state: ${seed}
 
 # Only cross-validated: skip the full-dataset model, and save no model, TF-IDF or k-mer files for inference

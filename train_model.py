@@ -734,7 +734,9 @@ def main(cfg: DictConfig):
         # Also save per-fold predictions (y_true, y_pred) so downstream metrics can be computed easily
         preds_rows = []
         for p in predictions:
-            for idx, y_t, y_p, y_prob in zip(p["indices"], p["y_true"], p["y_pred"], p["y_prob"]):
+            # Models without predict_proba (e.g. LinearSVC) store y_prob=None: leave the column empty
+            y_probs = p["y_prob"] if p["y_prob"] is not None else [None] * len(p["indices"])
+            for idx, y_t, y_p, y_prob in zip(p["indices"], p["y_true"], p["y_pred"], y_probs):
                 preds_rows.append({"fold": p["fold"], "sample_index": idx, "assembly": dataset_list[idx]["assembly"],
                                    "y_true": y_t, "y_pred": y_p, "y_prob": y_prob})
         preds_df = pd.DataFrame(preds_rows)
