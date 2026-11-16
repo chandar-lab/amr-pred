@@ -1,0 +1,2 @@
+#BioSample,Organism group,Scientific name,Isolation type,Location,Isolation source,Isolate,Antibiotic,Resistance phenotype,Measurement sign,MIC (mg/L),Disk diffusion (mm),Laboratory typing platform,Vendor,Laboratory typing method version or reagent,Testing standard,Create date,Assembly,MIC_revised,Phenotype_revised
+SAMN55283945,escherichia_coli,escherichia coli,clinical,not collected,animal infection,PDT003089535.1,cefotaxime,resistant,==,8.0,,Sensititre,,,CLSI,2026-02-10T19:48:02Z,GCA_055029395.1,8.0,resistant

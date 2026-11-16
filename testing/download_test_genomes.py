@@ -4,6 +4,7 @@ Download the genomes of a test dataset from NCBI into the genome cache used for 
 The test CSV is an export of the NCBI AST browser (https://www.ncbi.nlm.nih.gov/pathogens/ast) for one species,
 possibly with several drugs. The assemblies are obtained as for training: Shigella isolates are removed from
 E. coli, and the 'Isolate' column is merged with the NCBI isolates file (https://www.ncbi.nlm.nih.gov/pathogens/isolates).
+For a CSV with an 'Assembly' column (e.g. the released test datasets in benchmark_data/test/), --path-isolates is optional.
 The genomes of all the isolates with an assembly are downloaded (for all drugs), to
 <path_out>/<species>/<assembly>/ncbi_dataset/data/<assembly>/*.fna. Genomes already in the cache are skipped.
 
@@ -12,9 +13,12 @@ Requires the NCBI datasets command line tool (https://www.ncbi.nlm.nih.gov/datas
 Usage:
     PYTHONPATH=<path_to_repository> python testing/download_test_genomes.py \
         --path-csv <path_to_test_csv> \
-        --path-isolates <path_to_isolates_tsv> \
         --path-out <path_to_genome_cache> \
-        [--organism <species>] [--dry-run]
+        [--path-isolates <path_to_isolates_tsv>] [--organism <species>] [--dry-run]
+
+    e.g. for a released test dataset:
+    PYTHONPATH=. python testing/download_test_genomes.py \
+        --path-csv benchmark_data/test/escherichia_coli/escherichia_coli__imipenem_SR_filt.csv --path-out ../amr_genomic_data
 """
 
 import os
@@ -28,9 +32,11 @@ from data.data_utils import clean_ecoli_data, add_assemblies, genome_fna_files, 
 def get_parser():
     parser = argparse.ArgumentParser(description="Download the genomes of a test dataset from NCBI.")
     parser.add_argument("--path-csv", type=str, required=True,
-                        help="Path to the test CSV exported from the NCBI AST browser (one species, any drugs).")
-    parser.add_argument("--path-isolates", type=str, required=True,
-                        help="Path to the NCBI isolates file, used to get the assembly of each isolate.")
+                        help="Path to the test CSV: an export of the NCBI AST browser (one species, any drugs), or a CSV "
+                        "with an 'Assembly' column, e.g. a released test dataset in benchmark_data/test/.")
+    parser.add_argument("--path-isolates", type=str, default=None,
+                        help="Path to the NCBI isolates file, used to get the assembly of each isolate. "
+                        "If not given, the CSV's 'Assembly' column is used.")
     parser.add_argument("--path-out", type=str, required=True,
                         help="Root of the genome cache; genomes go to <path_out>/<organism>/.")
     parser.add_argument("--organism", type=str, default=None,
@@ -62,9 +68,16 @@ def main():
         logging.info(f"Removed {n_isolates - df['Isolate'].nunique()} Shigella isolates")
         n_isolates = df['Isolate'].nunique()
 
-    df = add_assemblies(df, args.path_isolates, organism)
+    if args.path_isolates:
+        df = add_assemblies(df.drop(columns=['Assembly'], errors='ignore'), args.path_isolates, organism)
+        source = args.path_isolates
+    elif 'Assembly' in df.columns:
+        df = df.dropna(subset=['Assembly'])
+        source = "the CSV's 'Assembly' column"
+    else:
+        raise ValueError(f"{args.path_csv} has no 'Assembly' column; pass --path-isolates to get the assemblies.")
     assemblies = sorted(df['Assembly'].unique())
-    logging.info(f"{df['Isolate'].nunique()}/{n_isolates} isolates have an assembly in {args.path_isolates}: "
+    logging.info(f"{df['Isolate'].nunique()}/{n_isolates} isolates have an assembly in {source}: "
                  f"{len(assemblies)} assemblies")
     if not assemblies:
         raise ValueError(f"No assemblies found for the isolates of {args.path_csv}; check --organism and --path-isolates.")

@@ -21,7 +21,7 @@ from sklearn.metrics import (
 )
 from features.kmer import KmerFeatures
 from features.utils import train_val_svd, compute_idf, apply_tfidf
-from data.data_utils import load_data
+from data.data_utils import load_data, register_config_resolvers
 from data.generate_phylogeny_folds import get_genomic_folds
 from training.train_utils import (
     compute_major_errors, load_fold_checkpoint, save_fold_checkpoint,
@@ -460,6 +460,9 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     return summary_stats, best_classification_report, results_df, full_train_model, predictions_per_fold
 
 
+register_config_resolvers()
+
+
 # config_path is a directory relative to this file (train_model.py)
 @hydra.main(config_path="config", config_name="main", version_base=None)
 def main(cfg: DictConfig):
@@ -589,6 +592,7 @@ def main(cfg: DictConfig):
             pathogen=pathogen, antibiotic=antibiotic,
             path_dataroot=cfg.dataset.path_dataroot, path_csv=cfg.dataset.path_csv,
             path_out=os.path.join(path_species, "phylogeny"),
+            path_folds=cfg.get("path_folds"),
             num_folds=cfg.num_folds, dist_method=cfg.split_method, 
             clustering_method=cfg.clustering_method,
         )

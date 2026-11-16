@@ -17,7 +17,7 @@ import logging
 from tqdm import tqdm
 import argparse
 from data_utils import (plot_antibiotic_counts,
-    get_drugs_for_organism_clsi, get_mic_breakpoints, clean_breakpoints_file,
+    get_drugs_for_organism_clsi, register_config_resolvers, DEFAULT_CLSI_BREAKPOINTS, get_mic_breakpoints, clean_breakpoints_file,
     clean_ecoli_data, normalize_ast_names, add_revised_mic, reinterpret_drug_with_mic, add_assemblies)
 
 
@@ -27,8 +27,8 @@ def get_parser():
     parser.add_argument(
         "--path-clsi-bps",
         type=str,
-        default="breakpoints_per_species_20250527.csv",
-        help="Path to the CLSI breakpoints file",
+        default=DEFAULT_CLSI_BREAKPOINTS,
+        help="Path to the CLSI breakpoints file (default: the file released in benchmark_data/)",
     )
     parser.add_argument(
         "--path-data",
@@ -56,6 +56,9 @@ parser = get_parser()
 args, remaining = parser.parse_known_args()
 # Leave only the arguments that argparse did not consume
 sys.argv = [sys.argv[0]] + remaining
+
+register_config_resolvers()
+
 
 @hydra.main(config_path="../config", config_name="main", version_base=None)
 def main(cfg: DictConfig):

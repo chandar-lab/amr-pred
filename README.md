@@ -5,6 +5,7 @@ This is the official codebase for predicting antimicrobial resistance (AMR) usin
 ### Getting Started
 
 The repository is structured as follows:
+* `benchmark_data` directory contains the datasets of our study: the training and test datasets for each species x antibiotic combination, the phylogenetic fold assignments, and the CLSI breakpoints (see [`benchmark_data/README.md`](benchmark_data/README.md)). The default config uses them directly.
 * `config` directory contains the config files for different dataset combinations and ML models from scikit-learn. We use [`hydra`](https://hydra.cc/docs/intro/) for running experiments 
 * `data` directory contains the code for downloading and preprocessing the data. Preprocessing includes reinterpreting the MIC values associated with public phenotypic data according to CLSI-defined breakpoints for a given list of bacterial species. 
   * In addition to random splits, we also create phylogeny-based splits based on intra-species genomic distances.  
@@ -63,13 +64,23 @@ Training logs a summary of each run to [W&B](https://wandb.ai) (`wandb` section 
 </details>
 
 
-#### Step 1: Preprocessing
+#### Step 1: Getting the data
+
+The datasets of our study are released in `benchmark_data/`, and the config points to them by default. To use them, you only need to download the genomes:
+
+```bash
+python data/download_dataset.py dataset=<difficulty>/<dataset_name>
+```
+
+This downloads the genomes of all the released datasets of the dataset's species to `<path_assemblies_root>/<species>/` (default: `../amr_genomic_data`, relative to the directory you run from). Before running it, make sure that the NCBI `datasets` command line tool is installed. See installation instructions [here](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/). Feature matrices, results and models are written to `path_out_cache` (default: `./datasets`).
+
+To rebuild the datasets from the latest NCBI data (or for other species and antibiotics) instead, follow the steps below, and set `path_datasets_reinterpreted` to your output directory.
 
 * Download the isolates database from the NCBI website (https://www.ncbi.nlm.nih.gov/pathogens/isolates/#) in `.tsv` format.
 * From NCBI's [AST browser](https://www.ncbi.nlm.nih.gov/pathogens/ast#), download the dataset for each species. Click "Filters" -> "Organism group" (e.g. staphylococcus aureus) -> "Resistance phenotype" (check-box SUSCEPTIBLE, RESISTANT, NOT DEFINED). Download the dataset in `.csv` format. 
   * This step downloads the data for all antibiotics available for the given organism group. We will use this `.csv` to reinterpret the data according to MIC values in the next step.
-* Run the `data/reinterpret_data_with_mic.py` script. This script creates individual specie x drug datasets based on the available MIC breakpoints in the breakpoints file. 
-  * This script requires three command line arguments to run, as well as hydra config information from `config/main.yaml`. It processes one species per run, so the following arguments must be passed: `--path-clsi-bps` (the location of the CLSI breakpoints file), `--path-data` (the path to the .csv file downloaded from the NCBI for the target species), and `--path-isolates`, the path to the .tsv file downloaded from the NCBI. `path_datasets_reinterpreted` from the hydra config is used as the output of the script.
+* Run the `data/reinterpret_data_with_mic.py` script (the parent directory of the `.csv` must be named after the species, e.g. `acinetobacter_baumannii/`). This script creates individual specie x drug datasets based on the available MIC breakpoints in the breakpoints file. 
+  * This script requires three command line arguments to run, as well as hydra config information from `config/main.yaml`. It processes one species per run, so the following arguments must be passed: `--path-clsi-bps` (the location of the CLSI breakpoints file; by default the one in `benchmark_data/`), `--path-data` (the path to the .csv file downloaded from the NCBI for the target species), and `--path-isolates`, the path to the .tsv file downloaded from the NCBI. `path_datasets_reinterpreted` from the hydra config is used as the output of the script.
 * Run `data/download_dataset.py` to download the raw genomic sequences from the NCBI database. Before running this script, make sure that `ncbi_datasets` python package is installed. See installation instructions [here](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/).
   * Although this script takes a species-antibiotic combination as input via the hydra config, it will download all sequences for the given species. 
   * To change the target species, use `--run dataset=<difficulty>/<dataset_name>` when running the script, using on the files in the `config/dataset` directory.
@@ -90,5 +101,6 @@ python ./amr-pred/train_model.py --run dataset=easy/a_baumannii__ciprofloxacin m
 
 #### Step 3: Running Inference
 
+* The released test datasets are in `benchmark_data/test/`. Download their genomes with `PYTHONPATH=. python testing/download_test_genomes.py --path-csv benchmark_data/test/<species>/<species>__<drug>_SR_filt.csv --path-out <path_assemblies_root>`.
 * Run `testing/test_model.py` for running model inference. Do NOT change the format of the model name when running inference. This script takes preprocessed csv file (dataset) as input, runs the model and saves: (i) all unique kmers, (ii) feature matrix, (iii) individual predictions and labels (`y_true` and `y_pred`), and (iv) classification report (sklearn). 
 * Additional files `explain_model.py` and `kmer_stats.py` are mirror the format of `test_model.py`, but are used for interpretability k-mer extraction and dataset analysis, respectively. 

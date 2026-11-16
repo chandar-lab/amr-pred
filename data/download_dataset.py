@@ -16,7 +16,10 @@ import os
 from loguru import logger
 import glob
 from omegaconf import DictConfig
-from data_utils import download_assemblies
+from data_utils import download_assemblies, register_config_resolvers
+
+
+register_config_resolvers()
 
 
 @hydra.main(config_path="../config", config_name="main", version_base=None)

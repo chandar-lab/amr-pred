@@ -9,7 +9,7 @@ import argparse
 import pandas as pd
 import numpy as np
 
-from data.data_utils import load_data, reinterpret_test_data
+from data.data_utils import load_data, reinterpret_test_data, DEFAULT_CLSI_BREAKPOINTS
 from features.kmer import KmerFeatures
 from features.utils import apply_tfidf
 
@@ -34,8 +34,9 @@ def get_parser():
                         "May contain several species/drugs: only the rows for the model's species and drug are used. "
                         "The labels are recomputed from the MIC values with the CLSI breakpoints, using the same filtering as "
                         "data/reinterpret_data_with_mic.py.")
-    parser.add_argument("--path-clsi-bps", type=str, default="./datasets/breakpoints_per_species_20250527.csv",
-                        help="Path to the CLSI breakpoints file used to reinterpret the test labels from the MIC values.")
+    parser.add_argument("--path-clsi-bps", type=str, default=DEFAULT_CLSI_BREAKPOINTS,
+                        help="Path to the CLSI breakpoints file used to reinterpret the test labels from the MIC values "
+                        "(default: the file released in benchmark_data/).")
     parser.add_argument("--path-isolates", type=str, default=None,
                         help="Path to the NCBI isolates file (https://www.ncbi.nlm.nih.gov/pathogens/isolates). If given, the "
                         "'Assembly' column is added by merging on 'Isolate', as for training; needed when the CSV has no 'Assembly' column.")

@@ -1,0 +1,143 @@
+#BioSample,Organism group,Scientific name,Isolation type,Location,Isolation source,Isolate,Antibiotic,Resistance phenotype,Measurement sign,MIC (mg/L),Disk diffusion (mm),Laboratory typing platform,Vendor,Laboratory typing method version or reagent,Testing standard,Create date,Assembly,MIC_revised,Phenotype_revised
+SAMN29441880,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395353.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T10:02:28Z,GCA_024718655.1,32.0,resistant
+SAMN29441867,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,Surveillance,PDT001395366.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T10:05:39Z,GCA_024718915.1,32.0,resistant
+SAMN29441866,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,urine,PDT001395368.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T10:05:56Z,GCA_024718945.1,32.0,resistant
+SAMN29441818,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395415.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T10:14:12Z,GCA_024719915.1,32.0,resistant
+SAMN29441817,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395416.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T10:14:21Z,GCA_024719925.1,32.0,resistant
+SAMN04014933,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000167133.1,aztreonam,resistant,==,32.0,,,,,CLSI,2016-11-10T13:03:59Z,GCA_001874805.1,32.0,resistant
+SAMN04014941,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000167135.1,aztreonam,resistant,>,64.0,,,,,CLSI,2016-11-10T13:06:18Z,GCA_001874975.1,128.0,resistant
+SAMN07291503,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000292993.1,aztreonam,resistant,==,32.0,,,,,CLSI,2018-03-05T09:29:06Z,GCA_002968515.1,32.0,resistant
+SAMN04901620,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000292996.1,aztreonam,susceptible,==,4.0,,,,,CLSI,2018-03-05T09:36:15Z,GCA_002968695.1,4.0,susceptible
+SAMN07291500,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000292998.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-03-05T12:58:07Z,GCA_002968955.1,128.0,resistant
+SAMN07291498,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000294805.1,aztreonam,resistant,==,32.0,,,,,CLSI,2018-03-14T19:09:06Z,GCA_003000655.1,32.0,resistant
+SAMN07291502,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000294806.1,aztreonam,resistant,==,32.0,,,,,CLSI,2018-03-14T19:14:06Z,GCA_003000695.1,32.0,resistant
+SAMN07291501,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000294807.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-03-14T19:16:07Z,GCA_003000755.1,128.0,resistant
+SAMN07291494,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000294808.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-03-14T19:19:16Z,GCA_003000795.1,128.0,resistant
+SAMN07291538,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000311291.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-04-30T09:02:13Z,GCA_003073735.1,128.0,resistant
+SAMN07291535,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000311292.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-04-30T09:07:08Z,GCA_003073795.1,128.0,resistant
+SAMN07291532,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000311293.1,aztreonam,susceptible,==,4.0,,,,,CLSI,2018-04-30T09:20:09Z,GCA_003073895.1,4.0,susceptible
+SAMN07291533,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000311294.1,aztreonam,resistant,==,32.0,,,,,CLSI,2018-04-30T09:56:09Z,GCA_003074095.1,32.0,resistant
+SAMN07291536,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000311295.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-04-30T10:01:06Z,GCA_003074115.1,128.0,resistant
+SAMN07291539,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000326660.1,aztreonam,resistant,==,32.0,,,,,CLSI,2018-06-06T07:52:10Z,GCA_003193645.1,32.0,resistant
+SAMN07291540,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000336705.1,aztreonam,susceptible,==,4.0,,,,,CLSI,2018-06-22T17:03:44Z,GCA_003260415.1,4.0,susceptible
+SAMN07291553,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000343385.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-07-05T07:51:08Z,GCA_003288335.1,128.0,resistant
+SAMN07291551,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000343390.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-07-05T07:53:07Z,GCA_003288435.1,128.0,resistant
+SAMN07291552,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000352612.1,aztreonam,resistant,==,64.0,,,,,CLSI,2018-07-16T09:07:16Z,GCA_003324255.1,64.0,resistant
+SAMN07291550,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000352613.1,aztreonam,resistant,==,64.0,,,,,CLSI,2018-07-16T09:08:08Z,GCA_003324275.1,64.0,resistant
+SAMN07291549,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000352614.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-07-16T09:09:08Z,GCA_003324295.1,128.0,resistant
+SAMN04901631,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000352616.1,aztreonam,resistant,==,32.0,,,,,CLSI,2018-07-16T09:11:18Z,GCA_003324405.1,32.0,resistant
+SAMN07291495,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000352617.1,aztreonam,resistant,>,64.0,,,,,CLSI,2018-07-16T09:12:25Z,GCA_003324465.1,128.0,resistant
+SAMN09788319,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,bone,PDT000424944.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:03:24Z,GCA_003968015.1,32.0,resistant
+SAMN09788322,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000424945.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:03:38Z,GCA_003968045.1,8.0,susceptible
+SAMN09788315,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424946.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:03:29Z,GCA_003968035.1,32.0,resistant
+SAMN09788318,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424947.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:03:34Z,GCA_003968025.1,8.0,susceptible
+SAMN09788320,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424948.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:03:50Z,GCA_003968055.1,32.0,resistant
+SAMN09788325,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424949.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:03:44Z,GCA_003968115.1,32.0,resistant
+SAMN09788323,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000424950.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:03:48Z,GCA_003968125.1,32.0,resistant
+SAMN09788327,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424951.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:03:55Z,GCA_003968135.1,32.0,resistant
+SAMN09788329,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000424952.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:01Z,GCA_003968155.1,32.0,resistant
+SAMN09788328,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,sterile tissue,PDT000424953.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:01Z,GCA_003968165.1,32.0,resistant
+SAMN09788330,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000424954.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:03Z,GCA_003968215.1,32.0,resistant
+SAMN09788331,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,sterile tissue,PDT000424955.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:12Z,GCA_003968235.1,32.0,resistant
+SAMN09788332,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424956.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:10Z,GCA_003968225.1,32.0,resistant
+SAMN09788333,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424957.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:04:07Z,GCA_003968275.1,8.0,susceptible
+SAMN09788334,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000424958.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:27Z,GCA_003968295.1,32.0,resistant
+SAMN09788337,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424959.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:13Z,GCA_003968305.1,32.0,resistant
+SAMN09788336,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,sterile tissue,PDT000424960.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:27Z,GCA_003968315.1,32.0,resistant
+SAMN09788338,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424961.1,aztreonam,susceptible,<=,2.0,,,,,CLSI,2018-12-25T01:04:27Z,GCA_003968325.1,2.0,susceptible
+SAMN09788352,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424962.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:04:19Z,GCA_003968375.1,8.0,susceptible
+SAMN09788316,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424963.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:04:41Z,GCA_003968425.1,8.0,susceptible
+SAMN09788317,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424964.1,aztreonam,susceptible,<=,2.0,,,,,CLSI,2018-12-25T01:04:39Z,GCA_003968445.1,2.0,susceptible
+SAMN09788324,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,blood,PDT000424966.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:44Z,GCA_003968495.1,32.0,resistant
+SAMN09788366,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424967.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:53Z,GCA_003968385.1,32.0,resistant
+SAMN09788335,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,sterile body fluid,PDT000424969.1,aztreonam,susceptible,<=,2.0,,,,,CLSI,2018-12-25T01:04:58Z,GCA_003968535.1,2.0,susceptible
+SAMN09788340,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424970.1,aztreonam,susceptible,<=,2.0,,,,,CLSI,2018-12-25T01:05:02Z,GCA_003968565.1,2.0,susceptible
+SAMN09788350,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000424971.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:04:57Z,GCA_003968585.1,32.0,resistant
+SAMN09788365,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424972.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:05:13Z,GCA_003968395.1,32.0,resistant
+SAMN09788375,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,sterile tissue,PDT000424973.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:05:07Z,GCA_003968625.1,8.0,susceptible
+SAMN09788357,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424974.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:05:18Z,GCA_003968615.1,32.0,resistant
+SAMN09788339,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424975.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:05:37Z,GCA_003968895.1,32.0,resistant
+SAMN09788344,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424978.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:05:46Z,GCA_003968955.1,8.0,susceptible
+SAMN09788354,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424979.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:05:49Z,GCA_003968985.1,32.0,resistant
+SAMN09788356,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424980.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:05:51Z,GCA_003969035.1,8.0,susceptible
+SAMN09788363,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000424982.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:05:57Z,GCA_003969075.1,8.0,susceptible
+SAMN09788360,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424984.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:06:06Z,GCA_003969095.1,32.0,resistant
+SAMN09788414,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,Afghanistan,groin,PDT000424985.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:06:09Z,GCA_003969105.1,32.0,resistant
+SAMN09788367,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000424986.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:07Z,GCA_003969155.1,8.0,susceptible
+SAMN09788368,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424987.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:09Z,GCA_003969175.1,8.0,susceptible
+SAMN09788370,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,groin,PDT000424988.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:10Z,GCA_003969165.1,8.0,susceptible
+SAMN09788372,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,groin,PDT000424989.1,aztreonam,susceptible,<=,2.0,,,,,CLSI,2018-12-25T01:06:19Z,GCA_003969195.1,2.0,susceptible
+SAMN09788371,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,groin,PDT000424990.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:27Z,GCA_003969225.1,8.0,susceptible
+SAMN09788413,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000424992.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:24Z,GCA_003969265.1,8.0,susceptible
+SAMN09788380,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424994.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:27Z,GCA_003969315.1,8.0,susceptible
+SAMN09788383,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424995.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:26Z,GCA_003969305.1,8.0,susceptible
+SAMN09788384,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424996.1,aztreonam,susceptible,<=,2.0,,,,,CLSI,2018-12-25T01:06:32Z,GCA_003969355.1,2.0,susceptible
+SAMN09788385,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000424997.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:06:33Z,GCA_003969365.1,32.0,resistant
+SAMN09788388,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,groin,PDT000424998.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:36Z,GCA_003969395.1,8.0,susceptible
+SAMN09788387,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000424999.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:06:35Z,GCA_003969405.1,32.0,resistant
+SAMN09788390,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000425000.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:37Z,GCA_003969415.1,8.0,susceptible
+SAMN09788391,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425001.1,aztreonam,susceptible,<=,2.0,,,,,CLSI,2018-12-25T01:06:37Z,GCA_003969445.1,2.0,susceptible
+SAMN09788396,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,groin,PDT000425002.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:44Z,GCA_003969475.1,8.0,susceptible
+SAMN09788341,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,,PDT000425005.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:06:51Z,GCA_003969535.1,32.0,resistant
+SAMN09788349,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425006.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:51Z,GCA_003969565.1,8.0,susceptible
+SAMN09788348,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000425007.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:06:51Z,GCA_003969555.1,32.0,resistant
+SAMN09788353,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425008.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:06:57Z,GCA_003969575.1,32.0,resistant
+SAMN09788355,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425009.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:06:54Z,GCA_003969615.1,8.0,susceptible
+SAMN09788369,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425010.1,aztreonam,susceptible,<=,2.0,,,,,CLSI,2018-12-25T01:07:02Z,GCA_003969635.1,2.0,susceptible
+SAMN09788358,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425011.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:07:02Z,GCA_003969645.1,32.0,resistant
+SAMN09788379,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,blood,PDT000425013.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:07:01Z,GCA_003969695.1,32.0,resistant
+SAMN09788389,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,ear,PDT000425014.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:07:07Z,GCA_003969725.1,8.0,susceptible
+SAMN09788381,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,groin,PDT000425015.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:07:04Z,GCA_003969735.1,8.0,susceptible
+SAMN09788386,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000425016.1,aztreonam,susceptible,<=,8.0,,,,,CLSI,2018-12-25T01:07:08Z,GCA_003969715.1,8.0,susceptible
+SAMN09788397,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,groin,PDT000425017.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:07:08Z,GCA_003969785.1,8.0,susceptible
+SAMN09788392,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425018.1,aztreonam,susceptible,==,4.0,,,,,CLSI,2018-12-25T01:07:10Z,GCA_003969775.1,4.0,susceptible
+SAMN09788394,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000425019.1,aztreonam,susceptible,==,4.0,,,,,CLSI,2018-12-25T01:07:13Z,GCA_003969795.1,4.0,susceptible
+SAMN09788398,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,groin,PDT000425020.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:07:20Z,GCA_003969825.1,8.0,susceptible
+SAMN09788401,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,Afghanistan,urine,PDT000425021.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:07:20Z,GCA_003969855.1,32.0,resistant
+SAMN09788403,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425022.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:07:21Z,GCA_003969875.1,8.0,susceptible
+SAMN09788404,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000425023.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:07:20Z,GCA_003969865.1,8.0,susceptible
+SAMN09788347,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425024.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:07:21Z,GCA_003969885.1,32.0,resistant
+SAMN09788407,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000425025.1,aztreonam,susceptible,==,4.0,,,,,CLSI,2018-12-25T01:07:23Z,GCA_003969915.1,4.0,susceptible
+SAMN09788411,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000425026.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:07:21Z,GCA_003969965.1,8.0,susceptible
+SAMN09788412,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425027.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:07:30Z,GCA_003969955.1,32.0,resistant
+SAMN09788402,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,blood,PDT000425029.1,aztreonam,susceptible,==,4.0,,,,,CLSI,2018-12-25T01:07:32Z,GCA_003970005.1,4.0,susceptible
+SAMN09788400,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,groin,PDT000425030.1,aztreonam,susceptible,<=,2.0,,,,,CLSI,2018-12-25T01:07:34Z,GCA_003969985.1,2.0,susceptible
+SAMN09788410,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000425031.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:07:35Z,GCA_003970055.1,8.0,susceptible
+SAMN09788405,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425032.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:07:41Z,GCA_003970065.1,32.0,resistant
+SAMN09788406,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,respiratory,PDT000425033.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:08:15Z,GCA_003970635.1,8.0,susceptible
+SAMN09788408,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000425034.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-25T01:08:18Z,GCA_003970615.1,32.0,resistant
+SAMN09788409,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000425035.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-25T01:08:21Z,GCA_003970625.1,8.0,susceptible
+SAMN09788342,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000430052.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-28T08:26:06Z,GCA_003977895.1,32.0,resistant
+SAMN09788346,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,,PDT000430053.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-28T08:26:15Z,GCA_003977915.1,32.0,resistant
+SAMN09788361,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT000430054.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-28T08:27:07Z,GCA_003977935.1,8.0,susceptible
+SAMN09788373,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,sterile tissue,PDT000430055.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2018-12-28T08:27:14Z,GCA_003977945.1,8.0,susceptible
+SAMN09788362,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,sterile tissue,PDT000430056.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-28T08:27:22Z,GCA_003977955.1,32.0,resistant
+SAMN09788351,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,wound,PDT000430057.1,aztreonam,resistant,>,16.0,,,,,CLSI,2018-12-28T08:27:28Z,GCA_003977995.1,32.0,resistant
+SAMN17616831,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,urine,PDT000967878.1,aztreonam,resistant,>,16.0,,Microscan,Beckman Coulter Inc,,CLSI,2021-02-17T23:03:49Z,GCA_016905405.1,32.0,resistant
+SAMN17616893,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,Mexico,,PDT001116470.1,aztreonam,resistant,>,16.0,,Microscan,Beckman Coulter Inc,,CLSI,2021-08-24T16:31:25Z,GCA_019740495.1,32.0,resistant
+SAMN29442025,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395153.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T09:23:28Z,GCA_024714595.1,32.0,resistant
+SAMN29442024,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395154.2,aztreonam,resistant,>=,64.0,,,,,CLSI,2022-08-19T09:23:38Z,GCA_024714615.1,64.0,resistant
+SAMN29442021,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,wound,PDT001395156.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T09:23:55Z,GCA_024714655.1,32.0,resistant
+SAMN29442022,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,wound,PDT001395157.2,aztreonam,resistant,>=,64.0,,,,,CLSI,2022-08-19T09:24:03Z,GCA_024714665.1,64.0,resistant
+SAMN29442019,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395159.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T09:25:11Z,GCA_024714715.1,32.0,resistant
+SAMN29441995,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,blood,PDT001395184.2,aztreonam,susceptible,==,8.0,,,,,CLSI,2022-08-19T09:29:20Z,GCA_024715205.1,8.0,susceptible
+SAMN29441937,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395243.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T09:40:24Z,GCA_024716405.1,32.0,resistant
+SAMN29441888,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395291.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T09:52:27Z,GCA_024717375.1,32.0,resistant
+SAMN29441865,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,wound,PDT001395367.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T10:05:48Z,GCA_024718935.1,32.0,resistant
+SAMN29441840,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395392.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T10:10:48Z,GCA_024719455.1,32.0,resistant
+SAMN29441821,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA: Texas,respiratory,PDT001395412.2,aztreonam,resistant,>=,32.0,,,,,CLSI,2022-08-19T10:13:42Z,GCA_024719845.1,32.0,resistant
+SAMN33329571,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,"USA: Cleveland, Ohio",Left cornea scraping,PDT001778385.1,aztreonam,resistant,>,16.0,,,,,CLSI,2023-06-12T08:36:11Z,GCA_030253475.1,32.0,resistant
+SAMN36409445,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,Greece,Bronchial secretions,PDT001823068.1,aztreonam,resistant,>=,64.0,,Vitek II,Biomérieux,,EUCAST,2023-07-18T23:03:09Z,GCA_030504675.1,64.0,resistant
+SAMN36409446,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,Greece,catheter,PDT001823069.1,aztreonam,resistant,>=,64.0,,Vitek II,Biomérieux,,EUCAST,2023-07-18T23:03:24Z,GCA_030504695.1,64.0,resistant
+SAMN40277792,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,Greece,wound,PDT002110214.1,aztreonam,resistant,>=,64.0,,Vitek,Biomérieux,,EUCAST,2024-03-11T23:03:25Z,GCA_037104415.1,64.0,resistant
+SAMN34111343,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,urine,PDT001682682.1,aztreonam,resistant,>,64.0,,,,96-Well Plate,CLSI,2023-04-07T12:43:06Z,GCA_029622995.1,128.0,resistant
+SAMN03316899,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,,PDT000050775.2,aztreonam,resistant,>,16.0,,Microscan,Siemens,,CLSI,2015-05-05T18:02:35Z,GCA_000937495.2,32.0,resistant
+SAMN04014946,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000167136.1,aztreonam,resistant,==,32.0,,,,,CLSI,2016-11-10T13:06:26Z,GCA_001874995.1,32.0,resistant
+SAMN04014935,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000167139.1,aztreonam,resistant,>,64.0,,,,,CLSI,2016-11-10T13:09:04Z,GCA_001875205.1,128.0,resistant
+SAMN04014949,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000167140.1,aztreonam,susceptible,==,8.0,,,,,CLSI,2016-11-10T13:09:09Z,GCA_001875215.1,8.0,susceptible
+SAMN04014936,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000294804.1,aztreonam,resistant,==,32.0,,,,,CLSI,2018-03-14T18:16:52Z,GCA_002997005.1,32.0,resistant
+SAMN04014951,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000331118.1,aztreonam,susceptible,==,4.0,,,,,CLSI,2018-06-10T08:09:07Z,GCA_003204335.1,4.0,susceptible
+SAMN04014952,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,,,PDT000380983.1,aztreonam,susceptible,==,4.0,,,,,CLSI,2018-09-17T09:51:17Z,GCA_003571805.1,4.0,susceptible
+SAMN02673308,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,USA,skin,PDT000034122.1,aztreonam,resistant,>,16.0,,Phoenix,Becton Dickinson,,CLSI,2014-06-20T14:01:22Z,GCA_000710625.1,32.0,resistant
+SAMN03316892,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,Afghanistan,Surveillance swab,PDT000050773.2,aztreonam,resistant,>,16.0,,Microscan,Siemens,,CLSI,2015-05-05T18:02:44Z,GCA_000937465.2,32.0,resistant
+SAMN07602569,pseudomonas_aeruginosa,Pseudomonas aeruginosa,clinical,Sweden: Gothenburg,sputum,PDT000326681.1,aztreonam,resistant,==,96.0,,,Biomérieux,E-Test,EUCAST,2018-06-06T10:03:08Z,GCA_003194245.1,96.0,resistant

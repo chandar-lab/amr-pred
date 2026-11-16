@@ -8,6 +8,19 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from omegaconf import OmegaConf
+
+# Root of the repository, and the data released with it (training/test datasets, folds, CLSI breakpoints)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BENCHMARK_DATA = os.path.join(REPO_ROOT, "benchmark_data")
+DEFAULT_CLSI_BREAKPOINTS = os.path.join(BENCHMARK_DATA, "clsi_breakpoints_20250527.csv")
+
+
+def register_config_resolvers():
+    '''Register the ${repo_root:} resolver used in config/main.yaml, so that paths inside the repository
+    do not depend on the directory the scripts are run from. Call before the hydra main function runs.'''
+    OmegaConf.register_new_resolver("repo_root", lambda: REPO_ROOT, replace=True)
+
 
 # global parameters
 FONTSIZE = 12

@@ -9,17 +9,18 @@ seed: 42
 debug: False
 num_folds: 5
 
-# Primary directories where the data is stored
-# The default values assume that your directory structure looks like this:
-# amr/
-# ├── amr-pred/
-#     ├── config/
-# ├── datasets/
-# amr_genomic_data/
+# Data directories. ${repo_root:} is the root of this repository; other relative paths are relative to the
+# directory the scripts are run from.
+# Genomes (.fna), downloaded by data/download_dataset.py into <path_assemblies_root>/<species>/
 path_assemblies_root: "../amr_genomic_data"
-path_datasets_reinterpreted: "./datasets" 
+# Training datasets (<species>/filtered/<species>__<drug>_SR_filt.csv): the released ones, or the output of
+# data/reinterpret_data_with_mic.py
+path_datasets_reinterpreted: "${repo_root:}/benchmark_data/train"
+# Released phylogenetic fold assignments (<species>/<species>__<drug>__<split_method>__phyloFolds_<clustering_method>.csv),
+# used when they match the run's settings; otherwise the folds are computed into path_out_cache. null always computes them.
+path_folds: "${repo_root:}/benchmark_data/folds"
 
-# output directory for caching the feature matrix and kmers
+# Output directory for the feature matrix and k-mer caches, computed folds, results and models (<species>/...)
 path_out_cache: "./datasets"
 
 # feature matrix parameters

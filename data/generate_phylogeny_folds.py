@@ -215,10 +215,28 @@ def load_dist_matrix(path_base, mmap_mode=None):
     return np.load(path_npy, mmap_mode=mmap_mode), np.load(path_names).tolist()
 
 
+def load_released_folds(logger, path_folds, pathogen, antibiotic, dist_method, clustering_method, num_folds):
+    """
+    Fold assignments released with the repository (<path_folds>/<pathogen>/<file>), as a dict of assembly -> fold,
+    or None if there is no such file or it has a different number of folds.
+    """
+    path = os.path.join(path_folds, pathogen, f"{pathogen}__{antibiotic}__{dist_method}__phyloFolds_{clustering_method}.csv")
+    if not os.path.isfile(path):
+        return None
+    df = pd.read_csv(path)
+    if df['fold'].nunique() != num_folds:
+        logger.warning(f"{path} has {df['fold'].nunique()} folds, not num_folds={num_folds}; computing the folds instead.")
+        return None
+    logger.info(f"Using the released fold assignments in {path}")
+    return dict(zip(df['assembly'], df['fold']))
+
+
 def get_genomic_folds(logger, pathogen, antibiotic, path_dataroot, path_csv, path_out, num_folds=5, 
-                      dist_method='dashing', clustering_method='unordered', force_regenerate=False):
+                      dist_method='dashing', clustering_method='unordered', force_regenerate=False, path_folds=None):
     """
     Generate genomic distance folds for a given pathogen and antibiotic.
+    If path_folds holds fold assignments for these settings (e.g. the ones released in benchmark_data/folds),
+    they are used as they are, and the distance matrix is neither computed nor returned (None).
     parameters:
     - pathogen: str, name of the pathogen (e.g., 'pseudomonas_aeruginosa')
     - antibiotic: str, name of the antibiotic (e.g., 'cefepime')
@@ -227,9 +245,16 @@ def get_genomic_folds(logger, pathogen, antibiotic, path_dataroot, path_csv, pat
     - num_folds: int, number of folds to create (default is 5
     - dist_method: str, method to use for distance calculation ('mash', 'ani', or 'dashing', default is 'dashing')
     - force_regenerate: bool, whether to force regeneration of the assemblies list and distance matrix
+    - path_folds: str or None, directory of released fold assignments to use instead of computing them
     returns:
     - fold_assignments: dict, mapping of assembly names to fold numbers
+    - the distance table (pd.DataFrame) between the dataset's assemblies, or None with released folds
     """
+    if path_folds and not force_regenerate:
+        released = load_released_folds(logger, path_folds, pathogen, antibiotic, dist_method, clustering_method, num_folds)
+        if released is not None:
+            return released, None
+
     path_fold_assignments_csv = os.path.join(
         path_out, f"{pathogen}__{antibiotic}__{dist_method}__phyloFolds_{clustering_method}.csv")
     dist_table_path = os.path.join(path_out, f"{pathogen}__{antibiotic}__{dist_method}__distMat")
