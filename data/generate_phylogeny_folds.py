@@ -11,7 +11,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from collections import defaultdict
-from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import squareform
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,10 +22,8 @@ from data.data_utils import load_data, get_folds_stats
 def parse_args():
     parser = argparse.ArgumentParser(description="Create genomic distance folds for a dataset")
 
-    # Alex's path-dataroot: ../amr-genomic-data/<pathogen>, assuming current root is scratch/amr
-    parser.add_argument("--path-dataroot", type=str, help="Root path of the dataset genomic sequences for all species")
-    # Alex's path-csv: ./datasets, assuming current root is scratch/amr
-    parser.add_argument("--path-csv", type=str, default="", help="Path to the folder containing CSV files for each specie-drug combination")
+    parser.add_argument("--path-dataroot", type=str, help="Directory with the genomic sequences of the pathogen, e.g. ../amr_genomic_data/<pathogen>")
+    parser.add_argument("--path-csv", type=str, default="", help="Directory of the reinterpreted datasets (path_datasets_reinterpreted, e.g. ./datasets); the CSVs are read from <path-csv>/<pathogen>/filtered")
     parser.add_argument("--path-out", type=str, default="", help="Path to the output folder where results will be saved. If not provided, will save in the current directory.")
     parser.add_argument("--pathogen", type=str, help="Name of the pathogen of interest")
     parser.add_argument("--antibiotic", type=str, help="Name of the antibiotic of interest")
@@ -122,12 +120,10 @@ def generate_folds(logger, path_fold_assignments_csv, assemblies, specie_drug_di
         # 1. Convert the square distance matrix to the condensed format
         # The linkage function requires a 1D array representing the upper triangle of the matrix.
         condensed_dist_mat = squareform(specie_drug_dist_matrix)
-        print(f"Condensed Distance Matrix Shape: {condensed_dist_mat.shape}")
+        logger.info(f"Condensed distance matrix shape: {condensed_dist_mat.shape}")
 
-        # 2. Perform hierarchical clustering (e.g., using UPGMA which is 'average' linkage)
-        # UPGMA is often used with genomic distance data.
-        Z = linkage(condensed_dist_mat, method='ward', metric='jaccard')
-        # print(f"Z shape: {Z.shape}")
+        # 2. Perform hierarchical clustering with Ward linkage on the genomic distances
+        Z = linkage(condensed_dist_mat, method='ward')
 
         # --- Step 2: Form Granular Flat Clusters ---
         # Create more clusters than folds to allow for flexible, balanced grouping.
@@ -136,10 +132,8 @@ def generate_folds(logger, path_fold_assignments_csv, assemblies, specie_drug_di
         min_diff_between_folds = 5  # Minimum size difference between folds to consider them balanced.
         
         while True:
-            print(f"Attempting to create {num_intermediate_clusters} intermediate clusters...")    
+            logger.info(f"Attempting to create {num_intermediate_clusters} intermediate clusters...")
             flat_clusters = fcluster(Z, num_intermediate_clusters, criterion='maxclust')
-            # print(f"Number of flat clusters formed: {len(set(flat_clusters))}")
-            # print(f"Flat clusters: {flat_clusters}")
 
             # --- Step 3: Group Sample Indices by Cluster ---
             # Create a dictionary where keys are cluster IDs and values are lists of sample indices.
@@ -162,13 +156,13 @@ def generate_folds(logger, path_fold_assignments_csv, assemblies, specie_drug_di
 
             # --- Verification ---
             fold_sizes = [len(fold) for fold in folds]
-            print(f"Sizes of folds: {fold_sizes}")
+            logger.info(f"Sizes of folds: {fold_sizes}")
             # Check if the folds are balanced enough
             if max(fold_sizes) - min(fold_sizes) < min_diff_between_folds:
-                print("Folds are balanced enough, stopping the clustering process.")
+                logger.info("Folds are balanced enough, stopping the clustering process.")
                 break
             else:
-                print("Folds are not balanced enough, continuing to form clusters.")
+                logger.info("Folds are not balanced enough, continuing to form clusters.")
                 num_intermediate_clusters += 5
 
         # --- Step 5: Populate fold_assignments dictionary ---
@@ -344,7 +338,7 @@ if __name__ == "__main__":
     # Example usage to pre-generate folds:
     # --path-dataroot ../amr_genomic_data/pseudomonas_aeruginosa --path-csv ./datasets --pathogen pseudomonas_aeruginosa --antibiotic cefepime
 
-    # Set up logging (copied from run_baseline_models.py)
+    # Set up logging to the console and to a file in the output folder
     now = datetime.now().strftime(f"%Y%m%d_%H%M%S")
     path_out = os.path.join(args.path_out, args.pathogen, "phylogeny")
     os.makedirs(path_out, exist_ok=True)

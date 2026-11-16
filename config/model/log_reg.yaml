@@ -5,7 +5,7 @@ name: "LGR"
 params:
   _target_: sklearn.linear_model.LogisticRegression
   # l1 (lasso) with liblinear: sparse k-mer selection, and it suits few genomes x many columns.
-  # Elasticnet (which needs saga) never beat l1 in the earlier sweeps, and saga mostly hit max_iter at large C.
+  # Elasticnet (which needs saga) did not beat l1 in our preliminary sweeps, and saga often hit max_iter at large C.
   penalty: l1
   solver: liblinear
   C: 1.0
@@ -37,8 +37,8 @@ sweep:
     goal: maximize
   parameters:
     C:
-      # Inverse of the regularization strength. On TF-IDF features, the earlier (unweighted) sweeps scored exactly 0.5
-      # for every C <= 1 and kept choosing C near the top of the range, up to 1e4.
+      # Inverse of the regularization strength. On TF-IDF features, preliminary sweeps (without class weights)
+      # scored a balanced accuracy of exactly 0.5 for every C <= 1, and often chose C as large as 1e4.
       distribution: log_uniform_values
       min: 1.0
       max: 100000.0

@@ -12,30 +12,13 @@ Usage:
 
 import os
 import pickle
-import re
-import time
 import logging
-import joblib
-import argparse
 import shap
 import pandas as pd
-from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 
-from sklearn.metrics import balanced_accuracy_score, classification_report
-
-from data.data_utils import load_data
-from features.kmer import KmerFeatures
 from testing.utils import get_parser, load_model_data
-
-PATHOGEN_NAME_MAPPER = {
-    "a_baumannii": "acinetobacter_baumannii",
-    "e_coli": "escherichia_coli",
-    "s_aureus": "staphylococcus_aureus",
-    "k_pneumoniae": "klebsiella_pneumoniae",
-    "p_aeruginosa": "pseudomonas_aeruginosa",
-}
 
 
 def main():

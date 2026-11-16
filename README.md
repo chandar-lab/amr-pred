@@ -49,9 +49,17 @@ pip install -e .
 <details>
 <summary>Generating phylogenetic folds</summary>
 
-In order to generate phylogenetic folds, you will have to download at least one of the following genomic distance tools. They are most easily installed using anaconda, so the recommended method is to create an `amr-utils` conda environment that is just used for genomic distance tools:
-* dashing: `conda install bioconda::dashing==0.4.0`
+Phylogenetic folds are the default (`use_genomic_splits=True`, `split_method=dashing`), so training needs the genomic distance tool on the `PATH` the first time the folds of a dataset are computed (they are cached afterwards). Install at least one of the following tools. They are most easily installed using anaconda, so the recommended method is to create an `amr-utils` conda environment that is just used for genomic distance tools:
+* dashing (default): `conda install bioconda::dashing==0.4.0`
 * mash: `conda install bioconda::mash==2.1`
+
+To train without them, use random splits with `use_genomic_splits=False`.
+</details>
+
+<details>
+<summary>Logging with Weights & Biases</summary>
+
+Training logs a summary of each run to [W&B](https://wandb.ai) (`wandb` section of `config/main.yaml`). Log in with `wandb login`, or set `wandb.mode=offline` (log locally) or `wandb.mode=disabled`. By default (`wandb.mode=null`) the `WANDB_MODE` environment variable is used if it is set. The results are saved to CSV files whatever the mode.
 </details>
 
 

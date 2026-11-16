@@ -3,18 +3,11 @@ Utility functions for the testing scripts, both for inference and explainability
 """
 
 import os
-import re
-import time
 import logging
 import joblib
 import argparse
-import shap
 import pandas as pd
-from datetime import datetime
 import numpy as np
-import matplotlib.pyplot as plt
-
-from sklearn.metrics import balanced_accuracy_score, classification_report
 
 from data.data_utils import load_data, reinterpret_test_data
 from features.kmer import KmerFeatures

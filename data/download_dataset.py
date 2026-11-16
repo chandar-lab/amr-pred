@@ -13,33 +13,14 @@ The script does the following:
 import hydra
 import pandas as pd
 import os
-# import argparse
 from loguru import logger
 import glob
 from omegaconf import DictConfig
 from data_utils import download_assemblies
 
 
-# def parse_args():
-#     parser = argparse.ArgumentParser(description="Download genomes from NCBI")
-#     parser.add_argument(
-#         "--path-csvs",
-#         type=str,
-#         # default="ncbi_SR_phenotpye_asts_20250505.tsv",
-#         help="Path to the folder containing CSV files for each specie-drug combination",
-#     )
-#     # parser.add_argument(
-#     #     "--path-out",
-#     #     type=str,
-#     #     default="/home/mila/n/naga-karthik.enamundram/scratch/dataset_ncbi_asts",
-#     #     help="Path to the output directory where the genomes will be downloaded",
-#     # )
-    
-#     return parser.parse_args()
-
 @hydra.main(config_path="../config", config_name="main", version_base=None)
 def main(cfg: DictConfig):
-    # args = parse_args()
     # get the organism name from the hydra config file
     organism = cfg.dataset.pathogen
 

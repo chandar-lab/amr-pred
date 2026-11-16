@@ -30,7 +30,6 @@ sweep:
     goal: maximize # 'maximize' or 'minimize'
     
   # Note: Parameter names here must match the model's __init__ argument names.
-  # Ranges as the wide space tested in claude_diag_sweep/diag_wide.py (2026-10-30), with max_depth kept at [3, 6, 9].
   # scale_pos_weight isn't swept: balance_classes sets it from the training genomes.
   parameters:
     max_depth:

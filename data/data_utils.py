@@ -24,12 +24,10 @@ def load_data(path_data_csv, path_root_fna):
     specie_drug_assemblies = df_data['Assembly'].tolist()
     # get the corresponding phenotypic labels for each assembly
     phenotypes = df_data['Phenotype_revised'].tolist()
-    # print(phenotypes)
 
     dataset_list = []
     for assembly, phenotype in zip(specie_drug_assemblies, phenotypes):
         temp_dict = {}
-        # if assembly not in dataset_dict:
         fname = glob.glob(os.path.join(path_root_fna, assembly, "ncbi_dataset", "data", assembly, "*.fna"))
         if len(fname) == 0:
             logging.info(f"WARNING: No .fna file found for assembly {assembly}. Skipping this entry.")
@@ -37,7 +35,7 @@ def load_data(path_data_csv, path_root_fna):
 
         temp_dict["seq"] = fname[0] 
         temp_dict["label"] = LABEL_MAPPING[phenotype]
-        temp_dict["assembly"] = assembly # ADDED FOR PHYLOGENY-BASED SPLITS
+        temp_dict["assembly"] = assembly  # used to assign the phylogeny-based folds
         dataset_list.append(temp_dict)
     
     return dataset_list
@@ -77,37 +75,13 @@ def plot_antibiotic_counts(antibiotic_dict, organism, save_path):
 
     organism = organism.replace(" ", "_").lower()
     plt.savefig(f"{save_path}/{organism}__drug_counts.png", dpi=300, facecolor="w")
-    # plt.show()
-    plt.close()
-
-
-# plot number of antibiotics per organism in a barplot
-def plot_antibiotic_counts_per_organism(df_counts, save_path):
-
-    # get the total
-    combined = df_counts["Antibiotic Count"].sum()
-
-    # draw the barplot
-    plt.figure(figsize=(13, 8))
-    sns.barplot(data=df_counts, x="Organism", y="Antibiotic Count", color="#FF6347")
-    plt.ylabel("Antibiotic Count", fontsize=FONTSIZE+3)
-    plt.xlabel("Organism", fontsize=FONTSIZE+3)
-    plt.xticks(rotation=90, fontsize=FONTSIZE+3)
-    plt.yticks(fontsize=FONTSIZE)
-    plt.title(f"Antibiotic Counts per Species. Total: {combined} datasets", fontsize=FONTSIZE+3)
-    # add the counts on top of the bars
-    for i, v in enumerate(df_counts["Antibiotic Count"]):
-        plt.text(i, v + 0.5, str(v), ha='center', fontsize=FONTSIZE)
-
-    plt.ylim(0, df_counts["Antibiotic Count"].max() + 10)
-    plt.tight_layout()
-    plt.savefig(f"{save_path}/antibiotic_counts_per_organism.png", dpi=300, facecolor="w")
     plt.close()
 
 
 def clean_breakpoints_file(path_clsi_bps):
     """
-    This function takes as input the path to the CLSI breakpoints file and performs some minor cleaning:
+    Load the CLSI breakpoints file (';'-separated) and clean it: drop drugs with no breakpoints, and lowercase
+    the drug and taxon names with underscores for spaces, as in the NCBI AST data.
     """
 
     df_bps = pd.read_csv(path_clsi_bps, sep=';')
@@ -125,9 +99,6 @@ def clean_breakpoints_file(path_clsi_bps):
 
     # replace acinetobacter_calcoaceticus/baumannii_complex with acinetobacter_baumannii
     df_bps['taxon'] = df_bps['taxon'].str.replace('acinetobacter_calcoaceticus/baumannii_complex', 'acinetobacter_baumannii', regex=False)
-
-    # # save the dataframe to a new CSV file
-    # df_bps.to_csv(path_file.replace(".csv", "_filt.csv"), index=False)
     return df_bps
 
 
@@ -135,9 +106,6 @@ def get_mic_breakpoints(df_bps, organism, drug):
     """
     Get the MIC breakpoints for a given organism and drug.
     """
-    # # read the CSV file
-    # df_bps = pd.read_csv(path_clsi_bps)
-    
     # filter the dataframe for the given organism and drug
     df_filtered = df_bps[(df_bps['taxon'] == organism) & (df_bps['drug'] == drug)]
     
@@ -155,9 +123,6 @@ def get_drugs_for_organism_clsi(df, organism):
     """
     Get all drugs for a given organism.
     """
-    # # read the CSV file
-    # df = pd.read_csv(path_clsi_bps)
-
     # filter the dataframe for the given organism
     df_filtered = df[df['taxon'] == organism]
     

@@ -27,7 +27,8 @@ matrix:
   k: 31
   feat_mode: "count"              # Can be set to either "binary" (presence/absence) or "count"
   max_features: 1_000_000         # Set to "None" to use all features. WARNING: This can be extremely memory intensive!
-  reduce_dimensionality: False    # True/False, to use the SVD-based dimensionality reduction.
+  reduce_dimensionality: False    # True/False, to use the SVD-based dimensionality reduction (fit on each fold's training rows).
+  svd_components: 163             # Number of SVD components kept when reduce_dimensionality is True
   subsample_frac: 1.0             # Fraction of genomes to use when building the feature matrix. Use 1.0 for all genomes (default)
   group_columns: True             # Merge k-mer columns identical across all genomes and drop constant ones (model name gets "_grp").
                                   # CV groups each fold on its training rows; test folds use the median over each group's
@@ -64,8 +65,10 @@ save_sweep_trials: False
 
 wandb:
   project: "amr-baselines"
-  entity: "aselstyne"
-  mode: "online"                  # Set to "offline" to disable logging
+  entity: null                    # W&B team or username; null uses the default entity of your W&B account
+  # "online", "offline" (log locally, sync later with `wandb sync`) or "disabled".
+  # null uses the WANDB_MODE environment variable if set, else "online"
+  mode: null
 
 hydra:
   # Logging configuration: https://hydra.cc/docs/tutorials/basic/running_your_app/logging/

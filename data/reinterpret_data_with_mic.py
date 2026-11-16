@@ -12,12 +12,11 @@ import hydra
 from omegaconf import DictConfig
 import sys
 import pandas as pd
-import numpy as np
 import os
 import logging
 from tqdm import tqdm
 import argparse
-from data_utils import (plot_antibiotic_counts, plot_antibiotic_counts_per_organism, 
+from data_utils import (plot_antibiotic_counts,
     get_drugs_for_organism_clsi, get_mic_breakpoints, clean_breakpoints_file,
     clean_ecoli_data, normalize_ast_names, add_revised_mic, reinterpret_drug_with_mic, add_assemblies)
 
@@ -44,12 +43,6 @@ def get_parser():
         default="ncbi_raw/isolates.tsv",
         help="Path to the isolates file downloaded from https://www.ncbi.nlm.nih.gov/pathogens/isolates",   
     )
-    # parser.add_argument(
-    #     "--path-out",
-    #     type=str,
-    #     default="datasets",
-    #     help="Path to the output directory where the individual pathogen-antiobiotic datasets will be saved",
-    # )
     parser.add_argument(
         "--save-plots",
         action="store_true",
@@ -109,8 +102,6 @@ def main(cfg: DictConfig):
         logger.info(f"Length of the original E. coli dataset: {orig_df_len} samples")
         # we need to only keep E.coli samples and discard the Shigella ones
         df = clean_ecoli_data(df)
-        # # save the cleaned dataframe
-        # df.to_csv(os.path.join(args.path_out, organism, 'filtered', f"{organism}_cleaned.csv"), index=False)
         logger.info(f"Cleaned E. coli data: {len(df)} samples")
         logger.info(f"Number of Shigella samples removed: {orig_df_len - len(df)}")
         # NOTE: difference between the original and cleaned E. coli dataset should match the number in the AST database
@@ -146,7 +137,6 @@ def main(cfg: DictConfig):
     # filter out to keep only the drugs that are in the breakpoints file
     drugs_in_bps = get_drugs_for_organism_clsi(df_bps, organism)
     df = df[df['Antibiotic'].isin(drugs_in_bps)]
-    # df.to_csv(os.path.join(args.path_out, organism, 'temp_data.csv'), index=True)
 
     # add a check to ensure that list of drugs match
     if not set(df['Antibiotic'].unique()).issubset(set(drugs_in_bps)):
@@ -169,17 +159,12 @@ def main(cfg: DictConfig):
     drugs = sorted(df['Antibiotic'].unique().tolist())
 
     organism_groups = [organism]
-    dataset_counts = {}
     for organism in tqdm(organism_groups, desc="Organism groups", unit="group"):
         
         drug_count = {}
         num_resistant_before, num_susceptible_before = 0, 0
         num_resistant_after, num_susceptible_after = 0, 0
         for drug in drugs:
-            # logger.info(f"======================")
-            # logger.info(f"Drug {drug}")
-            # logger.info(f"======================")
-
             # filter out for the current drug
             df_new = df[df['Antibiotic'] == drug].copy()
 
@@ -194,9 +179,7 @@ def main(cfg: DictConfig):
 
             num_resistant = len(df_new[df_new['Phenotype_revised'] == 'resistant'])
             num_susceptible = len(df_new[df_new['Phenotype_revised'] == 'susceptible'])
-            
-            # logger.info(f"Number of resistant samples for {drug}: {num_resistant}")
-            # logger.info(f"Number of susceptible samples for {drug}: {num_susceptible}")
+
             num_resistant_after += num_resistant
             num_susceptible_after += num_susceptible
             num_resistant_before += len(df_new[df_new['Resistance phenotype'] == 'resistant'])
@@ -210,24 +193,12 @@ def main(cfg: DictConfig):
             
             # save the filtered dataframe to a CSV file
             df_new.to_csv(output_path, index=False)
-            
-            # # keep only the relevant columns
-            # cols_to_keep = ['#BioSample', 'Organism group', 'Isolate', 'Assembly', 'Antibiotic',
-            #                     'Measurement sign', 'MIC (mg/L)', 'Resistance phenotype', 'MIC_revised', 'Phenotype_revised']
-            # df_to_compare = df_new[cols_to_keep]
-            
-            # # get the samples where 'resistance phenotype' is not the same as 'Phenotype_revised'
-            # df_compare = df_to_compare[df_to_compare['Resistance phenotype'] != df_to_compare['Phenotype_revised']]
-            # logger.info(f"Samples with different resistance phenotype: {len(df_compare)}")
 
             # create the dictionary
             drug_count[drug] = {
                 "resistant": num_resistant,
                 "susceptible": num_susceptible
             }
-    
-            # # get the number of antibiotics per organism (i.e. total number of "datasets")
-            # dataset_counts[organism] = dataset_counts.get(organism, 0) + 1
 
         # compute fractional change in resistant and susceptible samples
         logger.info(f"")
@@ -267,16 +238,6 @@ def main(cfg: DictConfig):
                     os.makedirs(save_path, exist_ok=True)
                 # plot the antibiotic counts
                 plot_antibiotic_counts(drug_count, organism, save_path)
-        
-                # # create a dataframe from the dictionary
-                # df_counts = pd.DataFrame.from_dict(dataset_counts, orient="index")
-                # df_counts.reset_index(inplace=True)
-                # df_counts.columns = ["Organism", "Antibiotic Count"]
-                # # sort the dataframe by antibiotic count
-                # df_counts.sort_values(by="Antibiotic Count", ascending=False, inplace=True)
-
-                # # plot the antibiotic counts per organism
-                # plot_antibiotic_counts_per_organism(df_counts, save_path)
 
 
 if __name__ == "__main__":

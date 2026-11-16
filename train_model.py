@@ -20,7 +20,7 @@ from sklearn.metrics import (
     balanced_accuracy_score, classification_report
 )
 from features.kmer import KmerFeatures
-from features.utils import plot_umap, efficient_svd, train_val_svd, compute_idf, apply_tfidf
+from features.utils import train_val_svd, compute_idf, apply_tfidf
 from data.data_utils import load_data
 from data.generate_phylogeny_folds import get_genomic_folds
 from training.train_utils import (
@@ -44,6 +44,16 @@ TRAINING_COLUMNS = ["swept", "n_sweep_trials", "model_params"]
 
 # Runs with a feature limit share one cached matrix of the top CACHE_FEATURES k-mers, and take their top max_features from it
 CACHE_FEATURES = 10_000_000
+
+
+def run_model_name(config):
+    """Model name used in the run and file names: the model's name plus suffixes for SVD, subsampling and grouping."""
+    name = config.model.name if not config.matrix.reduce_dimensionality else f"{config.model.name}_svd"
+    if config.matrix.subsample_frac < 1.0:
+        name += f"_sub{int(config.matrix.subsample_frac*100)}"
+    if config.matrix.group_columns:
+        name += "_grp"
+    return name
 
 
 def save_model_kmers(kmer_features, path_models, patho_short, antibiotic, k, mode, feat):
@@ -219,9 +229,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
     With only_fold (a fold index, or "full" for the final model), train just that part, save its
     checkpoint and return None. A later run without only_fold loads the checkpoints and writes the results.
     """
-    modelname = config.model.name if not config.matrix.reduce_dimensionality else f"{config.model.name}_svd"
-    modelname += f"_sub{int(config.matrix.subsample_frac*100)}" if config.matrix.subsample_frac < 1.0 else ""
-    modelname += "_grp" if config.matrix.group_columns else ""
+    modelname = run_model_name(config)
     
     logger.info(f"Starting {config.num_folds}-Fold CV for {modelname}...")
 
@@ -270,7 +278,7 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
 
         if config.matrix.reduce_dimensionality:
             logger.info("Reducing dimensionality of feature matrix using efficient SVD...")
-            X_train, X_test = train_val_svd(X_train, X_test, k=163)
+            X_train, X_test = train_val_svd(X_train, X_test, k=config.matrix.svd_components)
 
         
         current_model, extra = model_for_part(estimator, fold_params, fold_idx)
@@ -356,7 +364,6 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
         if score > best_overall_score:
             best_overall_score = score
             best_classification_report = classification_report(y_test, y_pred, digits=4)
-            # best_model = current_model
 
         logger.info(f"Fold {fold_idx+1} - Balanced Accuracy: {score:.3f} - VME: {vme:.3f} - ME: {me:.3f} - Time: {time.perf_counter() - start:.2f}s")
         
@@ -458,8 +465,6 @@ def fitmodel_nestedcv(X, pheno, cv_splits, estimator, config,use_sweeps=False, s
 def main(cfg: DictConfig):
     run_start = time.perf_counter()
     random.seed(cfg.seed)
-    hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
-    output_dir = hydra_cfg.runtime.output_dir
 
     path_root_fna = cfg.dataset.path_dataroot
     path_data_csv = cfg.dataset.path_csv
@@ -473,11 +478,7 @@ def main(cfg: DictConfig):
         raise FileNotFoundError(f"CSV file not found: {path_data_csv}. Please check the name of the pathogen and drug.")
 
     # Parameters
-    model_name = cfg.model.name if not cfg.matrix.reduce_dimensionality else f"{cfg.model.name}_svd"
-    if cfg.matrix.subsample_frac < 1.0:
-        model_name += f"_sub{int(cfg.matrix.subsample_frac*100)}"
-    if cfg.matrix.group_columns:
-        model_name += "_grp"
+    model_name = run_model_name(cfg)
     min_kmer_freq = 2   # filters out extremely rare k-mers that don't appear at least twice
     k = cfg.matrix.k
     feature_mode = cfg.matrix.feat_mode
@@ -511,7 +512,6 @@ def main(cfg: DictConfig):
         batch_size=256,                                         # Smaller batches for memory efficiency
         use_canonical=True,
         use_sparse=cfg.dataset.use_sparse,                      # Use sparse matrix for k-mer features
-        reduce_dimensionality=False,                            # This is the "leaky" SVD that acts on both train and test, so it's not currently used.
         path_full_matrix=os.path.join(path_species, "feature_matrices", f"{fname}__feat_{cache_feat}{'__sparse' if cfg.dataset.use_sparse else ''}.npz"),
         cache_features=cache_features,                          # Build the shared cache at its full size
         path_kmers=os.path.join(path_species, "unique_kmers", f"{patho_short}__{antibiotic}__k_{k}.npz"),
@@ -662,7 +662,7 @@ def main(cfg: DictConfig):
         return
 
     with wandb.init(
-        project=cfg.wandb.project, name=run_name, 
+        project=cfg.wandb.project, entity=cfg.wandb.entity, mode=cfg.wandb.mode, name=run_name,
         config=fixed_config, tags=["summary", "baseline", "cv"]
         ) as run:
 
@@ -726,7 +726,6 @@ def main(cfg: DictConfig):
         # Save the results to a CSV file
         save_fname = f"results_{run_name}"
         path_out = os.path.join(path_species, "results", save_fname)
-        # results_df = pd.DataFrame(results)
         # model_params last, as it is long
         fold_results_df = fold_results_df[[c for c in fold_results_df.columns if c != "model_params"] + ["model_params"]]
         fold_results_df.to_csv(f"{path_out}.csv", index=False)

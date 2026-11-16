@@ -10,7 +10,6 @@ Usage:
 
 '''
 
-import argparse
 import os
 import logging
 from Bio import SeqIO

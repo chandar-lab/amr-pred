@@ -18,7 +18,6 @@ try:
 except AttributeError:
     NUM_PROC = os.cpu_count()
 
-from features.utils import efficient_svd
 from features.column_groups import (
     group_columns, iter_dense_rows, iter_npz_rows, npz_array_header, prefix_groups, members_of_groups,
     constant_sq_norm
@@ -263,7 +262,7 @@ def _reduce_partition(args):
     return keys, counts, n_distinct
 
 class KmerFeatures:
-    def __init__(self, k=31, mode="binary", path_precomputed=None, reduce_dimensionality=False,
+    def __init__(self, k=31, mode="binary",
                  min_kmer_freq=2, use_canonical=True, batch_size=500, max_features=None, use_sparse=False,
                  path_kmers=None, path_full_matrix=None, cache_features=None, group_columns=False,
                  path_kmer_groups=None):
@@ -272,9 +271,7 @@ class KmerFeatures:
         
         Parameters:
         - k: int, length of k-mers
-        - mode: str, 'binary' or 'count' or 'entropy'
-        - path_precomputed: str, path to precomputed k-mer matrix (if available)
-        - reduce_dimensionality: bool, whether to apply dimensionality reduction
+        - mode: str, 'binary' (presence/absence) or 'count'
         - min_kmer_freq: int, minimum frequency to keep a k-mer (frequency filtering)
         - use_canonical: bool, use canonical k-mers (reduces features by ~50%)
         - batch_size: int, process sequences in batches to manage memory
@@ -294,15 +291,14 @@ class KmerFeatures:
         - path_kmer_groups: str, path to the k-mer groups saved with a grouped model (inference only).
           Each column's value is the median over its member k-mers, counting absent members as 0.
         """
-        assert mode in ("binary", "count", "entropy", "svd"), "Mode must be one of: 'binary', 'count', 'entropy', 'svd'"
+        if mode not in ("binary", "count"):
+            raise ValueError(f"mode must be 'binary' or 'count', got {mode!r}")
 
         logging.info(f"Initializing KmerFeatures with k={k}, mode={mode}, min_freq={min_kmer_freq}, use_sparse={use_sparse}")
 
         self.k = k
         self.mode = mode
         self.kmer_to_col = {}
-        # self.path_precomputed = path_precomputed
-        self.reduce_dim = reduce_dimensionality
         self.min_kmer_freq = min_kmer_freq
         self.use_canonical = use_canonical
         self.batch_size = batch_size
@@ -517,7 +513,7 @@ class KmerFeatures:
 
     def _value_dtype(self):
         """Dtype of the row values computed by the workers (before fitting them into the matrix dtype)."""
-        return np.float64 if self.mode == "entropy" or self.inference_groups else np.int64
+        return np.float64 if self.inference_groups else np.int64
 
     def _process_single_sequence(self, row_idx, fna_path):
         """
@@ -536,11 +532,6 @@ class KmerFeatures:
             kmer_dict = {k: 1 for k in set(filtered)}
         elif mode == "count":
             kmer_dict = Counter(filtered)
-        elif mode == "entropy":
-            kmer_dict = Counter(filtered)
-            total = sum(kmer_dict.values())
-            if total > 0:
-                kmer_dict = {k: v / total for k, v in kmer_dict.items()}
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
@@ -612,10 +603,7 @@ class KmerFeatures:
         Integer matrices start as uint8 and are widened with _fit_dtype when a count does not
         fit, so the final dtype is the smallest one that holds every value. Group medians can be
         fractional, so they are stored as floats."""
-        if self.mode in ("binary", "count") and not self.inference_groups:
-            return np.uint8
-        else:
-            return np.float32
+        return np.float32 if self.inference_groups else np.uint8
 
     @staticmethod
     def _fit_dtype(dtype, max_val):
@@ -626,10 +614,9 @@ class KmerFeatures:
 
     def build_feature_matrix(self, dataset): 
         """
-        Build feature matrix with a priority system:
-        1. Load and sub-sample from a full matrix if available.
-        2. Load from a standard precomputed matrix.
-        3. Build from scratch and save the full matrix if a path is given.
+        Build the feature matrix:
+        1. Load and sub-sample the cached full matrix (path_full_matrix) if it was built from the same genomes.
+        2. Otherwise build it from scratch, and cache it if path_full_matrix is given.
 
         With group_columns, the same steps run on the grouped matrix (see _build_grouped_matrix).
         """
@@ -637,27 +624,17 @@ class KmerFeatures:
         if self.group_columns:
             return self._build_grouped_matrix(dataset)
         
-        # --- NEW: Priority 1 - Load and sub-sample from a full matrix ---
+        # Load and sub-sample the cached full matrix
         if self._usable_cache(self.path_full_matrix):
             logging.info(f"Loading full feature matrix from {self.path_full_matrix} to sub-sample...")
             X, y = self.load_matrix(self.path_full_matrix)  # This also loads the full kmer_to_col map
             y = self._dataset_labels(dataset, y)
         else:
-            # --- Fallback: Build matrix from scratch (and cache it) ---
+            # Build the matrix from scratch (and cache it)
             X, y = self._build_from_scratch(dataset)
 
         X = self._take_top_columns(X)
-        if self.reduce_dim:
-            logging.info("Applying dimensionality reduction using SVD...")
-            _, _, X_reduced = efficient_svd(X)
-            return X_reduced, y
         return X, y
-
-        # # --- EXISTING: Priority 2 - Load from standard precomputed file ---
-        # if self.path_precomputed:
-        #     logging.info(f"Loading precomputed k-mer matrix from {self.path_precomputed}...")
-        #     X, y = self.load_matrix(self.path_precomputed)
-        #     return X, y
 
     def usable_cache_for(self, dataset, filepath):
         """Whether the cached matrix at filepath was built from the dataset's genomes (in order) and has enough
@@ -820,10 +797,6 @@ class KmerFeatures:
 
         y = self._dataset_labels(dataset, y)
         X = self._take_grouped_prefix(X)
-        if self.reduce_dim:
-            logging.info("Applying dimensionality reduction using SVD...")
-            _, _, X_reduced = efficient_svd(X)
-            return X_reduced, y
         return X, y
 
     def _kmers_in_column_order(self, kmer_to_col, n_cols):
@@ -965,21 +938,6 @@ class KmerFeatures:
         if hasattr(X, 'nnz'):
             logging.info(f"Final sparse matrix density: {X.nnz / (X.shape[0] * X.shape[1]):.6f}")
             logging.info(f"Memory usage: ~{X.data.nbytes / 1024**2:.1f} MB")
-
-        if self.reduce_dim:
-            logging.info("Applying dimensionality reduction using SVD...")
-            from sklearn.decomposition import TruncatedSVD
-            n_components = 100 #min(min(X.shape) - 1, 1000)
-            svd = TruncatedSVD(n_components=n_components, random_state=42)
-            # Fit to get the uncorrected verion, then apply correction for column means
-            X_uncorrected = svd.fit_transform(X)
-            V = svd.components_
-            # correct using column means; project each component onto the mean vector, then subtract
-            mu = np.asarray(X.mean(axis=0)).ravel()
-            mean_proj = mu @ V.T  # shape (n_components,)
-            X_corrected = X_uncorrected - mean_proj[None, :]
-            logging.info(f"Reduced dimensions from {X.shape[1]} to {X_corrected.shape[1]}")
-            return X_corrected, y
 
         return X, y
 
