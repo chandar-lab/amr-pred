@@ -23,6 +23,26 @@ from features.column_groups import (
     constant_sq_norm
 )
 
+def save_kmer_groups(path, kmers, offsets):
+    """
+    Save the k-mer groups of a grouped model to an .npz: kmers holds the member k-mers of every column, column after
+    column (representative first), as fixed-width bytes, and column j's members are kmers[offsets[j]:offsets[j + 1]].
+    """
+    kmers = np.asarray(kmers)
+    np.savez_compressed(path, kmers=kmers.astype(f"S{kmers.dtype.itemsize}"), offsets=np.asarray(offsets, dtype=np.int64))
+
+
+def load_kmer_groups(path):
+    """The k-mer groups of a grouped model (a list of member k-mers per column, representative first), from the
+    .npz written by save_kmer_groups or a pickled list (models saved before the .npz format)."""
+    if path.endswith(".npz"):
+        with np.load(path) as data:
+            kmers, offsets = data["kmers"].astype(str).tolist(), data["offsets"]
+        return [kmers[start:end] for start, end in zip(offsets[:-1], offsets[1:])]
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
 # Any run of characters other than A/C/G/T (N, or another IUPAC ambiguity code such as R, Y, K, M)
 NON_ACGT = re.compile(r"[^ACGT]+")
 
@@ -838,6 +858,13 @@ class KmerFeatures:
         members = members_of_groups(self.group_of, self.n_prefix, len(self.group_sizes))
         return [self.kmers[cols].astype(str).tolist() for cols in members]
 
+    def save_column_groups(self, path):
+        """Save the k-mer groups (see get_column_groups) with save_kmer_groups, for inference."""
+        members = members_of_groups(self.group_of, self.n_prefix, len(self.group_sizes))
+        offsets = np.concatenate([[0], np.cumsum([len(cols) for cols in members])])
+        cols = np.concatenate(members) if members else np.zeros(0, dtype=np.int64)
+        save_kmer_groups(path, self.kmers[cols], offsets)
+
     @staticmethod
     def _grouped_array_path(filepath):
         return filepath.replace(".npz", ".npy")
@@ -888,8 +915,7 @@ class KmerFeatures:
     def _load_kmer_groups(self, filepath):
         """Load the k-mer groups saved with a grouped model: a list of member k-mers per column."""
         logging.info(f"Loading k-mer groups from {filepath}...")
-        with open(filepath, 'rb') as f:
-            groups = pickle.load(f)
+        groups = load_kmer_groups(filepath)
         self.kmer_to_col = {kmer: col for col, members in enumerate(groups) for kmer in members}
         self.selected_kmers = set(self.kmer_to_col)
         self.group_sizes = np.array([len(members) for members in groups], dtype=np.int64)

@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 wandb
 results/
+# Default output directory (path_out_cache) when running from the repository root
+/datasets/
+# Released models, downloaded from Zenodo by testing/download_models.py
+/models/

@@ -1,10 +1,11 @@
 ## Antimicrobial Resistance Prediction
 
-This is the official codebase for predicting antimicrobial resistance (AMR) using standard ML classifiers. This is a joint collaboration between the Chandar Research Lab at Mila and BioMérieux. 
+This is the official codebase for predicting antimicrobial resistance (AMR) using standard ML classifiers, for the paper [A systematic analysis of machine learning pipelines for robust antimicrobial resistance prediction](https://www.biorxiv.org/content/10.64898/2026.06.28.734076v1). This is a joint collaboration between the Chandar Research Lab at Mila and BioMérieux.
 
 ### Getting Started
 
 The repository is structured as follows:
+* `models` directory (not in the repository) holds the trained models of the paper once downloaded from Zenodo with `testing/download_models.py`.
 * `benchmark_data` directory contains the datasets of our study: the training and test datasets for each species x antibiotic combination, the phylogenetic fold assignments, and the CLSI breakpoints (see [`benchmark_data/README.md`](benchmark_data/README.md)). The default config uses them directly.
 * `config` directory contains the config files for different dataset combinations and ML models from scikit-learn. We use [`hydra`](https://hydra.cc/docs/intro/) for running experiments 
 * `data` directory contains the code for downloading and preprocessing the data. Preprocessing includes reinterpreting the MIC values associated with public phenotypic data according to CLSI-defined breakpoints for a given list of bacterial species. 
@@ -17,9 +18,10 @@ The repository is structured as follows:
 
 #### Step 0: Setting up the Environment
 
-* Clone the repository
+* Clone the repository. All the commands below are run from its root directory.
 ```bash
 git clone https://github.com/chandar-lab/amr-pred.git
+cd amr-pred
 ```
 
 <details>
@@ -27,8 +29,8 @@ git clone https://github.com/chandar-lab/amr-pred.git
 <summary> Installing dependencies with uv </summary>
 
 * Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
-* Run `uv sync`. This will install all dependencies and create a virtual environment `amr-pred` within the repository.
-* Activate the environment using `source <path_to_repo>/.venv/bin/activate`
+* Run `uv sync`. This will install all dependencies in a virtual environment in the `.venv` directory of the repository.
+* Activate the environment using `source .venv/bin/activate`
 * To deactivate the environment, use `deactivate`
 
 </details>
@@ -72,7 +74,7 @@ The datasets of our study are released in `benchmark_data/`, and the config poin
 python data/download_dataset.py dataset=<difficulty>/<dataset_name>
 ```
 
-This downloads the genomes of all the released datasets of the dataset's species to `<path_assemblies_root>/<species>/` (default: `../amr_genomic_data`, relative to the directory you run from). Before running it, make sure that the NCBI `datasets` command line tool is installed. See installation instructions [here](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/). Feature matrices, results and models are written to `path_out_cache` (default: `./datasets`).
+This downloads the genomes of all the released datasets of the dataset's species to `<path_assemblies_root>/<species>/` (default: `../amr_genomic_data`, next to the repository). Before running it, make sure that the NCBI `datasets` command line tool is installed. See installation instructions [here](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/). Feature matrices, results and models are written to `path_out_cache` (default: `./datasets`, which git ignores). Both paths can be changed in `config/main.yaml` or on the command line, e.g. `path_assemblies_root=/data/genomes`.
 
 To rebuild the datasets from the latest NCBI data (or for other species and antibiotics) instead, follow the steps below, and set `path_datasets_reinterpreted` to your output directory.
 
@@ -81,9 +83,9 @@ To rebuild the datasets from the latest NCBI data (or for other species and anti
   * This step downloads the data for all antibiotics available for the given organism group. We will use this `.csv` to reinterpret the data according to MIC values in the next step.
 * Run the `data/reinterpret_data_with_mic.py` script (the parent directory of the `.csv` must be named after the species, e.g. `acinetobacter_baumannii/`). This script creates individual specie x drug datasets based on the available MIC breakpoints in the breakpoints file. 
   * This script requires three command line arguments to run, as well as hydra config information from `config/main.yaml`. It processes one species per run, so the following arguments must be passed: `--path-clsi-bps` (the location of the CLSI breakpoints file; by default the one in `benchmark_data/`), `--path-data` (the path to the .csv file downloaded from the NCBI for the target species), and `--path-isolates`, the path to the .tsv file downloaded from the NCBI. `path_datasets_reinterpreted` from the hydra config is used as the output of the script.
-* Run `data/download_dataset.py` to download the raw genomic sequences from the NCBI database. Before running this script, make sure that `ncbi_datasets` python package is installed. See installation instructions [here](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/download-and-install/).
+* Run `data/download_dataset.py` to download the raw genomic sequences from the NCBI database, as above (it needs the NCBI `datasets` command line tool).
   * Although this script takes a species-antibiotic combination as input via the hydra config, it will download all sequences for the given species. 
-  * To change the target species, use `--run dataset=<difficulty>/<dataset_name>` when running the script, using on the files in the `config/dataset` directory.
+  * To change the target species, pass `dataset=<difficulty>/<dataset_name>`, using one of the files in the `config/dataset` directory.
 
 
 #### Step 2: Training a Model
@@ -93,14 +95,39 @@ To rebuild the datasets from the latest NCBI data (or for other species and anti
 * An example line that will launch a training job for a_baumannii__ciprofloxacin using 1 million features, a k-mer length of 17, random evaluation folds and no sweeps is: 
 
 ```bash
-python ./amr-pred/train_model.py --run dataset=easy/a_baumannii__ciprofloxacin matrix.k=17 matrix.max_features=1_000_000 use_genomic_splits=False use_sweeps=False
+python train_model.py dataset=easy/a_baumannii__ciprofloxacin matrix.k=17 matrix.max_features=1_000_000 use_genomic_splits=False use_sweeps=False
 ```
+* The model is chosen with `model=<name>`, using one of the files in `config/model`: `xgboost` (default), `log_reg`, `random_forests`, `svm` or `knn`. For example, `python train_model.py dataset=easy/a_baumannii__ciprofloxacin model=log_reg`.
+* To check your setup quickly, add `debug=True`, which only uses the first 75 genomes of the dataset (with `wandb.mode=disabled` to skip the logging). Debug runs save their results under the same names as full runs, so use a separate `path_out_cache` for them.
 * Additional settings can be found by inspecting the config files in `config/`. Hyperparameter tuning ranges are also contained therein.
 * To train a model on a species-drug combination that is not one of the nine included in our study, simply copy the format used by one of the given combinations into a new YAML file and change the relevant fields.
 
 
 #### Step 3: Running Inference
 
+* The trained models of the paper (XGBoost with default parameters at the best k-mer size of each combination, 1M k-mers) are released on Zenodo. Download them into `models/` with `python testing/download_models.py`; see `models/README.md` for their contents. Models you train yourself are saved to `<path_out_cache>/<species>/models/` (XGBoost models in XGBoost's JSON format, with their k-mer groups as `.npz`).
 * The released test datasets are in `benchmark_data/test/`. Download their genomes with `PYTHONPATH=. python testing/download_test_genomes.py --path-csv benchmark_data/test/<species>/<species>__<drug>_SR_filt.csv --path-out <path_assemblies_root>`.
-* Run `testing/test_model.py` for running model inference. Do NOT change the format of the model name when running inference. This script takes preprocessed csv file (dataset) as input, runs the model and saves: (i) all unique kmers, (ii) feature matrix, (iii) individual predictions and labels (`y_true` and `y_pred`), and (iv) classification report (sklearn). 
-* Additional files `explain_model.py` and `kmer_stats.py` are mirror the format of `test_model.py`, but are used for interpretability k-mer extraction and dataset analysis, respectively. 
+* Run `testing/test_model.py` for running model inference. Do NOT change the format of the model name when running inference, as the k-mer size and other settings are read from it. This script takes a dataset csv file as input, runs the model and saves: (i) the feature matrix, (ii) individual predictions and labels, and (iii) the balanced accuracy and classification report (sklearn). For example:
+```bash
+PYTHONPATH=. python testing/test_model.py \
+    --path-fna ../amr_genomic_data \
+    --path-csv benchmark_data/test/escherichia_coli/escherichia_coli__imipenem_SR_filt.csv \
+    --path-model models/escherichia_coli__imipenem/model_XGB_grp__e_coli__imipenem__k_15__mode_count__split_phylo__feat_1000K__no_sweep.json \
+    --path-out <output_directory>
+```
+* Additional files `explain_model.py` and `kmer_stats.py` mirror the format of `test_model.py`, but are used for interpretability k-mer extraction and dataset analysis, respectively.
+
+### Citation
+
+If you use this code or data, please cite:
+
+```bibtex
+@article{aselstyne2026systematic,
+  title   = {A systematic analysis of machine learning pipelines for robust antimicrobial resistance prediction},
+  author  = {Aselstyne, Alex and Naga Karthik, Enamundram and El Azami, Meriem and Pogorelcnik, Romain and Fournier, Quentin and Chandar, Sarath},
+  journal = {bioRxiv},
+  year    = {2026},
+  doi     = {10.64898/2026.06.28.734076},
+  url     = {https://www.biorxiv.org/content/10.64898/2026.06.28.734076v1}
+}
+``` 

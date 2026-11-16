@@ -25,7 +25,8 @@ def main():
     path_out = args.path_out
 
     # Start logging
-    file_handler = logging.FileHandler(os.path.join(args.path_out, f"inference.log"))
+    os.makedirs(args.path_out, exist_ok=True)
+    file_handler = logging.FileHandler(os.path.join(args.path_out, "inference.log"))
     console_handler = logging.StreamHandler()
 
     logging.basicConfig(

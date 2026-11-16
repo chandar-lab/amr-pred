@@ -11,6 +11,7 @@ import hydra
 import numpy as np
 import pandas as pd
 import pickle
+import xgboost as xgb
 from omegaconf import DictConfig, OmegaConf
 
 from sklearn.svm import LinearSVC
@@ -57,20 +58,33 @@ def run_model_name(config):
 
 
 def save_model_kmers(kmer_features, path_models, patho_short, antibiotic, k, mode, feat):
-    """Save the k-mers needed at inference: the k-mer groups for grouped runs, else the k-mer list."""
+    """Save the k-mers needed at inference: the k-mer groups (.npz) for grouped runs, else the k-mer list."""
     os.makedirs(path_models, exist_ok=True)
     if kmer_features.group_columns:
-        # List in column order; each entry lists the column's member k-mers, representative first
-        payload = kmer_features.get_column_groups()
-        path_out_kmers = os.path.join(path_models, f"kmer_groups_{patho_short}__{antibiotic}__k_{k}__mode_{mode}__feat_{feat}.pkl")
-    else:
-        kmers_columns = kmer_features.get_feature_names() # K-mer feature names in the order of the feature matrix columns
-        # Build a dict of kmer: count when the count starts at the number of k-mers and decrements to 1
-        payload = {kmer: count for kmer, count in zip(kmers_columns, range(len(kmers_columns), 0, -1))}
-        path_out_kmers = os.path.join(path_models, f"kmers_{patho_short}__{antibiotic}__k_{k}__mode_{mode}__feat_{feat}.pkl")
+        # Each column's member k-mers, representative first, in column order
+        path_out_kmers = os.path.join(path_models, f"kmer_groups_{patho_short}__{antibiotic}__k_{k}__mode_{mode}__feat_{feat}.npz")
+        logger.info(f"Saving the k-mer groups used in the model to {path_out_kmers} ...")
+        kmer_features.save_column_groups(path_out_kmers)
+        return
+    kmers_columns = kmer_features.get_feature_names() # K-mer feature names in the order of the feature matrix columns
+    # Build a dict of kmer: count when the count starts at the number of k-mers and decrements to 1
+    payload = {kmer: count for kmer, count in zip(kmers_columns, range(len(kmers_columns), 0, -1))}
+    path_out_kmers = os.path.join(path_models, f"kmers_{patho_short}__{antibiotic}__k_{k}__mode_{mode}__feat_{feat}.pkl")
     logger.info(f"Saving the k-mers used in the model to {path_out_kmers} ...")
     with open(path_out_kmers, "wb") as f:
         pickle.dump(payload, f)
+
+
+def save_model(model, path_models, run_name):
+    """Save the full-dataset model for inference: XGBoost models in XGBoost's JSON format (portable across library
+    versions, and safe to load), other models with joblib. Returns the path."""
+    if isinstance(model, xgb.XGBModel):
+        path = os.path.join(path_models, f"model_{run_name}.json")
+        model.save_model(path)
+    else:
+        path = os.path.join(path_models, f"model_{run_name}.pkl")
+        joblib.dump(model, path)
+    return path
 
 
 def model_params_json(model, config, extra_keys=()):
@@ -704,10 +718,8 @@ def main(cfg: DictConfig):
         # save the best model, with what inference needs (TF-IDF parameters, k-mers).
         # None when the full-dataset model is skipped (SVD, or model.fit_full_model: false): nothing is saved
         if full_train_model is not None:
-            save_fname_model = f"model_{run_name}.pkl"
-            path_out_model = os.path.join(path_species, "models", save_fname_model)
-            logger.info(f"Saving the best model to {path_out_model} ...")
-            joblib.dump(full_train_model, path_out_model)
+            path_out_model = save_model(full_train_model, os.path.join(path_species, "models"), run_name)
+            logger.info(f"Saved the full-dataset model to {path_out_model}")
 
         # save the TF-IDF parameters next to the model, for inference
         if full_train_model is not None and tfidf_idf is not None:

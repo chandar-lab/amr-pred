@@ -11,13 +11,13 @@ Usage:
 """
 
 import os
-import pickle
 import logging
 import shap
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
+from features.kmer import load_kmer_groups
 from testing.utils import get_parser, load_model_data
 
 
@@ -31,7 +31,8 @@ def main():
     path_out = args.path_out
 
     # Start logging
-    file_handler = logging.FileHandler(os.path.join(args.path_out, f"inference.log"))
+    os.makedirs(args.path_out, exist_ok=True)
+    file_handler = logging.FileHandler(os.path.join(args.path_out, "inference.log"))
     console_handler = logging.StreamHandler()
 
     logging.basicConfig(
@@ -98,8 +99,7 @@ def main():
     })
     if kmer_features.inference_groups:
         # Every k-mer merged into the column; the model cannot tell them apart in the training data
-        with open(kmer_features.path_kmer_groups, "rb") as f:
-            kmer_groups = pickle.load(f)
+        kmer_groups = load_kmer_groups(kmer_features.path_kmer_groups)
         shap_df["group_size"] = [len(members) for members in kmer_groups]
         shap_df["group_kmers"] = [";".join(members) for members in kmer_groups]
     # Sort by mean_abs_shap_value descending

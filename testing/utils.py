@@ -7,6 +7,7 @@ import logging
 import joblib
 import argparse
 import pandas as pd
+import xgboost as xgb
 import numpy as np
 
 from data.data_utils import load_data, reinterpret_test_data, DEFAULT_CLSI_BREAKPOINTS
@@ -57,7 +58,7 @@ def _parse_model_filename(filename):
     """
     Parse model filename and extract structured information.
 
-    Expected format: model_<model_name>__<pathogen>__<antibiotic>__k_<k>__mode_<mode>[__split_<split>]__feat_<size>[__no_sweep].pkl
+    Expected format: model_<model_name>__<pathogen>__<antibiotic>__k_<k>__mode_<mode>[__split_<split>]__feat_<size>[__no_sweep].<json|pkl>
     Fields after the antibiotic are matched by prefix, so files saved without a split segment also parse.
     
     Args:
@@ -67,7 +68,7 @@ def _parse_model_filename(filename):
         dict: Dictionary with parsed components
     """
     stem = os.path.basename(filename)
-    stem = stem[:-len(".pkl")] if stem.endswith(".pkl") else stem
+    stem = os.path.splitext(stem)[0] if stem.endswith((".pkl", ".json", ".ubj")) else stem
     parts = stem.split("__")
 
     result = {
@@ -87,6 +88,15 @@ def _parse_model_filename(filename):
                 break
     
     return result
+
+
+def load_model(path_model):
+    """Load a trained model: an XGBoost model saved in XGBoost's format (.json/.ubj), or a joblib .pkl."""
+    if path_model.endswith((".json", ".ubj")):
+        model = xgb.XGBClassifier()
+        model.load_model(path_model)
+        return model
+    return joblib.load(path_model)
 
 
 def get_reinterpreted_csv_path(path_out, pathogen, antibiotic):
@@ -113,7 +123,7 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_cls
     logging.info("Loading model from %s", path_model)
     if not os.path.isfile(path_model):
         raise FileNotFoundError(f"Model file not found: {path_model}")
-    model = joblib.load(path_model)
+    model = load_model(path_model)
 
     # extract kmer size and feature matrix size from the model_path
     model_fname = path_model.split('/')[-1]
@@ -144,7 +154,7 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_cls
 
     # Models trained on TF-IDF features (LGR, KNN with model.use_tfidf) need its parameters from training;
     # check before the slow feature extraction
-    model_stem = os.path.basename(path_model)[len("model_"):-len(".pkl")]
+    model_stem = os.path.splitext(os.path.basename(path_model))[0][len("model_"):]
     path_tfidf = os.path.join(model_parent_path, f"tfidf_{model_stem}.npz")
     if not os.path.isfile(path_tfidf):
         if model_info['model_name'].startswith('KNN'):
@@ -159,6 +169,8 @@ def load_model_data(path_root_fna, path_data_csv, path_model, path_out, path_cls
     grouped = model_info['model_name'].endswith('_grp')
     kmers_fname = "kmer_groups" if grouped else "kmers"
     path_kmers = os.path.join(model_parent_path, f"{kmers_fname}_{pathogen}__{antibiotic}__k_{k}__mode_{kmer_mode}__feat_{fmat_size}.pkl")
+    if grouped and os.path.isfile(path_kmers[:-len(".pkl")] + ".npz"):
+        path_kmers = path_kmers[:-len(".pkl")] + ".npz"     # k-mer groups saved as .npz (current format)
     if not os.path.isfile(path_kmers):
         # Models saved before the mode was part of the name
         path_kmers_legacy = os.path.join(model_parent_path, f"{kmers_fname}_{pathogen}__{antibiotic}__k_{k}__feat_{fmat_size}.pkl")
