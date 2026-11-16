@@ -30,8 +30,8 @@ def parse_args():
     parser.add_argument("--folds", type=int, default=5, help="Number of folds to create")
     parser.add_argument("--dist_method", type=str, default='dashing', choices=['mash', 'ani', 'dashing'], 
                         help="Method to use for distance calculation: 'mash', 'ani', or 'dashing'. Default is 'dashing'.")
-    parser.add_argument("--clustering", type=str, default='unordered', choices=['unordered', 'hierarchical'], 
-                        help="Method to use for splitting the data into folds: 'unordered' or 'hierarchical'. Default is 'unordered'.")
+    parser.add_argument("--clustering", type=str, default='hierarchical', choices=['unordered', 'hierarchical'], 
+                        help="Method to use for splitting the data into folds: 'unordered' or 'hierarchical'. Default is 'hierarchical', as in config/main.yaml.")
     parser.add_argument("--force_regenerate", action='store_true', help="Force regeneration of the assemblies list and distance matrix, even if they already exist")
     return parser.parse_args()
 
@@ -232,7 +232,7 @@ def load_released_folds(logger, path_folds, pathogen, antibiotic, dist_method, c
 
 
 def get_genomic_folds(logger, pathogen, antibiotic, path_dataroot, path_csv, path_out, num_folds=5, 
-                      dist_method='dashing', clustering_method='unordered', force_regenerate=False, path_folds=None):
+                      dist_method='dashing', clustering_method='hierarchical', force_regenerate=False, path_folds=None):
     """
     Generate genomic distance folds for a given pathogen and antibiotic.
     If path_folds holds fold assignments for these settings (e.g. the ones released in benchmark_data/folds),

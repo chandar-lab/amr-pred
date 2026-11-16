@@ -45,4 +45,6 @@ labels from the MIC values with the breakpoints file.
 ## CLSI breakpoints
 
 `clsi_breakpoints_20250527.csv` (`;`-separated) holds the CLSI susceptible (`BP_S_CLSI (<=)`) and resistant
-(`BP_R_CLSI (>=)`) MIC breakpoints (mg/L) per species and drug. TODO: source and citation.
+(`BP_R_CLSI (>=)`) MIC breakpoints (mg/L) per species and drug, from:
+
+> Lewis II J. CLSI M100, 35th edition. Clinical and Laboratory Standards Institute, 2025.
