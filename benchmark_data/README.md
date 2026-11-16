@@ -2,7 +2,7 @@
 
 The datasets used in our study, for the 9 species x antibiotic combinations in `config/dataset/`. The default
 paths in `config/main.yaml` point here, so training uses these files without any setup apart from downloading the
-genomes (`data/download_dataset.py`). The trained models are released separately on Zenodo (`python testing/download_models.py`).
+genomes (`data/download_dataset.py`). The trained models are released separately on Zenodo ([doi:10.5281/zenodo.24285925](https://doi.org/10.5281/zenodo.24285925); `python testing/download_models.py`).
 
 ```
 benchmark_data/

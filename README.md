@@ -5,7 +5,7 @@ This is the official codebase for predicting antimicrobial resistance (AMR) usin
 ### Getting Started
 
 The repository is structured as follows:
-* `models` directory (not in the repository) holds the trained models of the paper once downloaded from Zenodo with `testing/download_models.py`.
+* `models` directory (not in the repository) holds the trained models of the paper once downloaded from [Zenodo](https://doi.org/10.5281/zenodo.24285925) with `testing/download_models.py`.
 * `benchmark_data` directory contains the datasets of our study: the training and test datasets for each species x antibiotic combination, the phylogenetic fold assignments, and the CLSI breakpoints (see [`benchmark_data/README.md`](benchmark_data/README.md)). The default config uses them directly.
 * `config` directory contains the config files for different dataset combinations and ML models from scikit-learn. We use [`hydra`](https://hydra.cc/docs/intro/) for running experiments 
 * `data` directory contains the code for downloading and preprocessing the data. Preprocessing includes reinterpreting the MIC values associated with public phenotypic data according to CLSI-defined breakpoints for a given list of bacterial species. 
@@ -105,7 +105,7 @@ python train_model.py dataset=easy/a_baumannii__ciprofloxacin matrix.k=17 matrix
 
 #### Step 3: Running Inference
 
-* The trained models of the paper (XGBoost with default parameters at the best k-mer size of each combination, 1M k-mers) are released on Zenodo. Download them into `models/` with `python testing/download_models.py`; see `models/README.md` for their contents. Models you train yourself are saved to `<path_out_cache>/<species>/models/` (XGBoost models in XGBoost's JSON format, with their k-mer groups as `.npz`).
+* The trained models of the paper (XGBoost with default parameters at the best k-mer size of each combination, 1M k-mers) are released on Zenodo ([doi:10.5281/zenodo.24285925](https://doi.org/10.5281/zenodo.24285925)). Download them into `models/` with `python testing/download_models.py`; see `models/README.md` for their contents. Models you train yourself are saved to `<path_out_cache>/<species>/models/` (XGBoost models in XGBoost's JSON format, with their k-mer groups as `.npz`).
 * The released test datasets are in `benchmark_data/test/`. Download their genomes with `PYTHONPATH=. python testing/download_test_genomes.py --path-csv benchmark_data/test/<species>/<species>__<drug>_SR_filt.csv --path-out <path_assemblies_root>`.
 * Run `testing/test_model.py` for running model inference. Do NOT change the format of the model name when running inference, as the k-mer size and other settings are read from it. This script takes a dataset csv file as input, runs the model and saves: (i) the feature matrix, (ii) individual predictions and labels, and (iii) the balanced accuracy and classification report (sklearn). For example:
 ```bash

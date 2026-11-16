@@ -20,8 +20,9 @@ import zipfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Zenodo record of the released models (the number at the end of its DOI, 10.5281/zenodo.<record>)
-ZENODO_RECORD_ID = None
+# Zenodo record of the released models, all versions: https://doi.org/10.5281/zenodo.24285925
+# (the latest version is downloaded; --record <id of a version> picks a specific one)
+ZENODO_RECORD_ID = "24285925"
 ARCHIVE_NAME = "amr_pred_models.zip"
 TOP_DIR = "amr_pred_models"  # folder at the root of the archive; its contents go to --out
 
@@ -30,18 +31,23 @@ def get_parser():
     parser = argparse.ArgumentParser(description="Download the released models from Zenodo.")
     parser.add_argument("--out", type=str, default=os.path.join(REPO_ROOT, "models"),
                         help="Directory to extract the models to (default: models/ in the repository).")
-    parser.add_argument("--record", type=str, default=ZENODO_RECORD_ID,
-                        help="Zenodo record ID to download from (default: the record of the paper's models).")
+    parser.add_argument("--record", type=str, default=None,
+                        help="Zenodo record ID of a specific version to download (default: the latest version of the "
+                        "paper's models).")
     parser.add_argument("--archive", type=str, default=None,
                         help=f"Extract a local copy of {ARCHIVE_NAME} instead of downloading it.")
     parser.add_argument("--force", action="store_true", help="Replace the models already in --out.")
     return parser
 
 
-def zenodo_file(record):
-    """URL and checksum ("md5:<hex>") of ARCHIVE_NAME in the Zenodo record."""
-    with urllib.request.urlopen(f"https://zenodo.org/api/records/{record}", timeout=60) as response:
-        files = json.load(response)["files"]
+def zenodo_file(record=None):
+    """URL and checksum ("md5:<hex>") of ARCHIVE_NAME in a Zenodo record (default: the latest version of the models)."""
+    url = f"https://zenodo.org/api/records/{record}" if record else \
+        f"https://zenodo.org/api/records/{ZENODO_RECORD_ID}/versions/latest"
+    with urllib.request.urlopen(url, timeout=60) as response:
+        data = json.load(response)
+    files = data["files"]
+    print(f"Zenodo record {data['id']} (doi:{data['doi']})")
     for entry in files:
         if entry["key"] == ARCHIVE_NAME:
             return entry["links"]["self"], entry["checksum"]
@@ -72,9 +78,10 @@ def extract(archive, out):
     out = os.path.abspath(out)
     with zipfile.ZipFile(archive) as z:
         for member in z.infolist():
-            if member.is_dir():
-                continue
             parts = member.filename.split("/")
+            # Skip directories, and the metadata macOS adds when zipping (__MACOSX/, .DS_Store)
+            if member.is_dir() or parts[0] == "__MACOSX" or parts[-1] == ".DS_Store":
+                continue
             if parts[0] != TOP_DIR or len(parts) < 2:
                 raise ValueError(f"Unexpected file in {archive}: {member.filename}")
             target = os.path.abspath(os.path.join(out, *parts[1:]))
@@ -103,8 +110,6 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         archive = args.archive
         if archive is None:
-            if args.record is None:
-                sys.exit("No Zenodo record is set yet; pass --record <id>, or --archive with a local copy of the models.")
             archive = os.path.join(tmp, ARCHIVE_NAME)
             download(*zenodo_file(args.record), archive)
         if args.force and os.path.isdir(args.out):
