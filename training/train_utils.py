@@ -16,7 +16,8 @@ def compute_major_errors(y_true, y_pred):
     # MEs should not exceed 3%, and an overall essential MIC agreement of >90% of device MICs within one doubling dilution of a CLSI reference MIC.
     # More info: https://academic.oup.com/cid/article-abstract/49/11/1749/344384
 
-    cm = confusion_matrix(y_true, y_pred)
+    # labels=[0, 1] keeps the matrix 2x2 when a fold has a single class (e.g. small datasets or debug=True)
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
     tn, fp, fn, tp = cm.ravel()
 
     # VME is the false negative rate; proportion of resistant samples misclassified as susceptible; aka Type II error
